@@ -156,6 +156,7 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
     candidates = support_reads.keys()
     p_value = 1.0
     ref_reads_num, alt_reads_num = 0, 0
+    most_significant_pos = None
     for pos in candidates:
         ref_reads, alt_reads = support_reads[pos]
         assigned_reads = set()
@@ -173,7 +174,8 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
                 p_value = p_value_ase
                 ref_reads_num = len(shared_ref_reads)
                 alt_reads_num = len(shared_alt_reads)
-    return p_value, ref_reads_num, alt_reads_num
+                most_significant_pos = pos
+    return p_value, ref_reads_num, alt_reads_num, most_significant_pos
 
 
 def calc_ase_asts(isoquant_read_assignments, reads_tag, support_reads, gene_id, p_value_threshold=0.05):
@@ -246,8 +248,8 @@ def analyze_ase_genes(bam_file, vcf_file, gene_id, gene_region, gene_name, isoqu
     start_pos = gene_region["start"]  # 1-based, start-inclusive
     end_pos = gene_region["end"]  # 1-based, end-inclusive
     support_reads = get_support_reads(bam_file, vcf_file, chr, start_pos, end_pos)
-    p_value, ref_reads, alt_reads = calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id)
-    return gene_id, gene_name, p_value, ref_reads, alt_reads
+    p_value, ref_reads, alt_reads, var_pos = calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id)
+    return gene_id, gene_name, chr, var_pos, p_value, ref_reads, alt_reads
 
 
 def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file, output_file, threads, gene_types,
@@ -267,9 +269,9 @@ def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file,
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
     with open(output_file, "w") as f:
-        f.write("Gene\tRef\tAlt\tP-value\n")
-        for gene_id, gene_name, p_value, ref_reads, alt_reads in results:
-            f.write(f"{gene_name}\t{ref_reads}\t{alt_reads}\t{p_value}\n")
+        f.write("Gene\tChr\tPos\tRef\tAlt\tP-value\n")
+        for gene_id, gene_name, chr, pos, p_value, ref_reads, alt_reads in results:
+            f.write(f"{gene_name}\t{chr}\t{pos}\t{ref_reads}\t{alt_reads}\t{p_value}\n")
 
 
 if __name__ == "__main__":
