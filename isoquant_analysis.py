@@ -2,6 +2,7 @@ import argparse
 import gzip
 import pysam
 from scipy.stats import binomtest
+from statsmodels.stats.multitest import multipletests
 from collections import defaultdict
 from multiprocessing import Manager
 import concurrent.futures
@@ -193,32 +194,83 @@ def get_reads_tag(bam_file, chr, start_pos, end_pos):
     return reads_tag
 
 
+# def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, isoquant_read_assignments):
+#     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
+#     assigned_reads = set()
+#     for isoform_id, reads in isoquant_read_assignments[gene_id].items():
+#         assigned_reads.update(reads)
+#     phase_set_hap_count = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {haplotype: count}
+#     for rname in assigned_reads:
+#         ps = reads_tag[rname]["PS"]
+#         hp = reads_tag[rname]["HP"]
+#         if ps and hp:
+#             phase_set_hap_count[ps][hp] += 1
+#     p_value = 1.0
+#     h1_count, h2_count = 0, 0
+#     phase_set = "."  # Placeholder for phase set
+#     for ps, hap_count in phase_set_hap_count.items():
+#         if hap_count[1] + hap_count[2] < min_count:
+#             continue
+#         # Calculate Binomial test p-value
+#         total_reads = hap_count[1] + hap_count[2]
+#         p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
+#         if p_value_ase < p_value:
+#             p_value = p_value_ase
+#             h1_count = hap_count[1]
+#             h2_count = hap_count[2]
+#             phase_set = ps
+#     return (gene_name, p_value, phase_set, h1_count, h2_count)
+
+from collections import defaultdict
+from scipy.stats import binomtest
+from statsmodels.stats.multitest import multipletests
+
+
 def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, isoquant_read_assignments):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     assigned_reads = set()
+
+    # Collect assigned reads from isoquant_read_assignments
     for isoform_id, reads in isoquant_read_assignments[gene_id].items():
         assigned_reads.update(reads)
+
+    # Track haplotype counts for each phase set
     phase_set_hap_count = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {haplotype: count}
     for rname in assigned_reads:
         ps = reads_tag[rname]["PS"]
         hp = reads_tag[rname]["HP"]
         if ps and hp:
             phase_set_hap_count[ps][hp] += 1
-    p_value = 1.0
-    h1_count, h2_count = 0, 0
-    phase_set = "."  # Placeholder for phase set
+
+    # Step 1: Collect p-values for each phase set
+    p_values = []
+    phase_sets = []
+    hap_counts = []
+
     for ps, hap_count in phase_set_hap_count.items():
         if hap_count[1] + hap_count[2] < min_count:
             continue
-        # Calculate Binomial test p-value
+        # Binomial test p-value
         total_reads = hap_count[1] + hap_count[2]
         p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
-        if p_value_ase < p_value:
-            p_value = p_value_ase
-            h1_count = hap_count[1]
-            h2_count = hap_count[2]
-            phase_set = ps
-    return (gene_name, p_value, phase_set, h1_count, h2_count)
+        p_values.append(p_value_ase)
+        phase_sets.append(ps)
+        hap_counts.append((hap_count[1], hap_count[2]))
+
+    # Step 2: Apply Benjamini–Hochberg correction
+    if p_values:
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+        # Step 3: Find the most significant adjusted p-value
+        min_p_value_index = adjusted_p_values.argmin()
+        most_significant_phase_set = phase_sets[min_p_value_index]
+        h1_count, h2_count = hap_counts[min_p_value_index]
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+
+        return (gene_name, adjusted_p_value, most_significant_phase_set, h1_count, h2_count)
+
+    # If no valid p-values are found, return defaults
+    return (gene_name, 1.0, ".", 0, 0)
 
 
 def analyze_ase_genes(assignment_file, annotation_file, bam_file, out_file, threads, gene_types, assignment_type,

@@ -3,6 +3,7 @@ import gzip
 import pysam
 from scipy.stats import binomtest
 from scipy.stats import chi2_contingency
+from statsmodels.stats.multitest import multipletests
 import concurrent.futures
 from multiprocessing import Manager
 import argparse
@@ -152,30 +153,70 @@ def get_support_reads(bam_file, vcf_file, chr, start_pos, end_pos):
     return support_reads
 
 
+# def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
+#     candidates = support_reads.keys()
+#     p_value = 1.0
+#     ref_reads_num, alt_reads_num = 0, 0
+#     most_significant_pos = None
+#     for pos in candidates:
+#         ref_reads, alt_reads = support_reads[pos]
+#         assigned_reads = set()
+#         for isoform_id, reads in isoquant_read_assignments[gene_id].items():
+#             assigned_reads.update(reads)
+#         ## calculate ASE
+#         shared_ref_reads = set(ref_reads).intersection(assigned_reads)
+#         shared_alt_reads = set(alt_reads).intersection(assigned_reads)
+#         total_ase_counts = len(shared_ref_reads) + len(shared_alt_reads)
+#         # print(f"gene_id: {gene_id}, pos: {pos}, ref_reads: {len(ref_reads)}, alt_reads: {len(alt_reads)}, shared_ref_reads: {len(shared_ref_reads)}, shared_alt_reads: {len(shared_alt_reads)}")
+#         if total_ase_counts >= 10:
+#             p_value_ase = binomtest(len(shared_ref_reads), total_ase_counts, 0.5, alternative='two-sided').pvalue
+#             # print(f"gene_id: {gene_id}, pos: {pos}, ref_reads: {len(ref_reads)}, alt_reads: {len(alt_reads)}, shared_ref_reads: {len(shared_ref_reads)}, shared_alt_reads: {len(shared_alt_reads)}, p_value_ase: {p_value_ase}")
+#             if p_value_ase < p_value:
+#                 p_value = p_value_ase
+#                 ref_reads_num = len(shared_ref_reads)
+#                 alt_reads_num = len(shared_alt_reads)
+#                 most_significant_pos = pos
+#     return p_value, ref_reads_num, alt_reads_num, most_significant_pos
+
+
 def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
     candidates = support_reads.keys()
-    p_value = 1.0
-    ref_reads_num, alt_reads_num = 0, 0
-    most_significant_pos = None
+    p_values = []
+    pos_list = []
+    ref_alt_counts = []
+
+    # Step 1: Collect p-values
     for pos in candidates:
         ref_reads, alt_reads = support_reads[pos]
         assigned_reads = set()
         for isoform_id, reads in isoquant_read_assignments[gene_id].items():
             assigned_reads.update(reads)
-        ## calculate ASE
+
+        # Calculate ASE
         shared_ref_reads = set(ref_reads).intersection(assigned_reads)
         shared_alt_reads = set(alt_reads).intersection(assigned_reads)
         total_ase_counts = len(shared_ref_reads) + len(shared_alt_reads)
-        # print(f"gene_id: {gene_id}, pos: {pos}, ref_reads: {len(ref_reads)}, alt_reads: {len(alt_reads)}, shared_ref_reads: {len(shared_ref_reads)}, shared_alt_reads: {len(shared_alt_reads)}")
+
         if total_ase_counts >= 10:
             p_value_ase = binomtest(len(shared_ref_reads), total_ase_counts, 0.5, alternative='two-sided').pvalue
-            # print(f"gene_id: {gene_id}, pos: {pos}, ref_reads: {len(ref_reads)}, alt_reads: {len(alt_reads)}, shared_ref_reads: {len(shared_ref_reads)}, shared_alt_reads: {len(shared_alt_reads)}, p_value_ase: {p_value_ase}")
-            if p_value_ase < p_value:
-                p_value = p_value_ase
-                ref_reads_num = len(shared_ref_reads)
-                alt_reads_num = len(shared_alt_reads)
-                most_significant_pos = pos
-    return p_value, ref_reads_num, alt_reads_num, most_significant_pos
+            p_values.append(p_value_ase)
+            pos_list.append(pos)
+            ref_alt_counts.append((len(shared_ref_reads), len(shared_alt_reads)))
+
+    # Step 2: Apply Benjamini–Hochberg correction
+    if p_values:
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+        # Step 3: Find the most significant position with the lowest adjusted p-value
+        min_p_value_index = adjusted_p_values.argmin()
+        most_significant_pos = pos_list[min_p_value_index]
+        ref_reads_num, alt_reads_num = ref_alt_counts[min_p_value_index]
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+
+        return adjusted_p_value, ref_reads_num, alt_reads_num, most_significant_pos
+
+    # If no significant p-values, return default values
+    return 1.0, 0, 0, None
 
 
 def calc_ase_asts(isoquant_read_assignments, reads_tag, support_reads, gene_id, p_value_threshold=0.05):
