@@ -221,10 +221,6 @@ def get_reads_tag(bam_file, chr, start_pos, end_pos):
 #             phase_set = ps
 #     return (gene_name, p_value, phase_set, h1_count, h2_count)
 
-from collections import defaultdict
-from scipy.stats import binomtest
-from statsmodels.stats.multitest import multipletests
-
 
 def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, isoquant_read_assignments):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
