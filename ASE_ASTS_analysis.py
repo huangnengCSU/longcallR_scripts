@@ -219,6 +219,52 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
     return 1.0, 0, 0, None
 
 
+def calculate_asts_pvalue(isoquant_read_assignments, support_reads, gene_id):
+    candidates = support_reads.keys()
+    p_values = []
+    cand_variant_positions = []
+    cand_isoforms = []
+    cand_contingency_table = []
+
+    isoforms = isoquant_read_assignments[gene_id].keys()
+    if len(isoforms) >= 2:
+        for pos in candidates:
+            ref_reads, alt_reads = support_reads[pos]
+            ref_isoform_reads = {isoform_id: 0 for isoform_id in isoforms}
+            alt_isoform_reads = {isoform_id: 0 for isoform_id in isoforms}
+
+            for isoform_id, reads in isoquant_read_assignments[gene_id].items():
+                shared_ref_reads = set(ref_reads).intersection(reads)
+                shared_alt_reads = set(alt_reads).intersection(reads)
+                ref_isoform_reads[isoform_id] = len(shared_ref_reads)
+                alt_isoform_reads[isoform_id] = len(shared_alt_reads)
+
+            # Ensure consistent ordering using a list of keys
+            isoform_ids = list(ref_isoform_reads.keys())
+            ref_counts = [ref_isoform_reads[isoform_id] + 1 for isoform_id in isoform_ids]
+            alt_counts = [alt_isoform_reads[isoform_id] + 1 for isoform_id in isoform_ids]
+            contingency_table = [ref_counts, alt_counts]  # size: [2, num_isoforms]
+            chi2, p_value_asts, _, _ = chi2_contingency(contingency_table)
+            p_values.append(p_value_asts)
+            cand_variant_positions.append(pos)
+            cand_isoforms.append(isoform_ids)
+            cand_contingency_table.append(contingency_table)
+    # Apply Benjamini–Hochberg correction
+    if p_values:
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+        min_p_value_index = adjusted_p_values.argmin()
+        most_significant_pos = cand_variant_positions[min_p_value_index]
+        most_significant_isoforms = cand_isoforms[min_p_value_index]
+        isoforms_str = ",".join(most_significant_isoforms)
+        most_significant_contingency_table = cand_contingency_table[min_p_value_index]
+        contingency_table_str = ",".join(
+            [f"{most_significant_contingency_table[0][i]}:{most_significant_contingency_table[1][i]}" for i in
+             range(len(most_significant_isoforms))])
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+        return adjusted_p_value, most_significant_pos, isoforms_str, contingency_table_str
+    return 1.0, None, None, None
+
+
 def calc_ase_asts(isoquant_read_assignments, reads_tag, support_reads, gene_id, p_value_threshold=0.05):
     candidates = support_reads.keys()
     for pos in candidates:
@@ -284,16 +330,32 @@ def calc_ase_asts(isoquant_read_assignments, reads_tag, support_reads, gene_id, 
         ## calculate haplotype ASTS
 
 
-def analyze_ase_genes(bam_file, vcf_file, gene_id, gene_region, gene_name, isoquant_read_assignments):
+def analyze_ase_asts(bam_file, vcf_file, gene_id, gene_region, gene_name, isoquant_read_assignments):
     chr = gene_region["chr"]
     start_pos = gene_region["start"]  # 1-based, start-inclusive
     end_pos = gene_region["end"]  # 1-based, end-inclusive
     support_reads = get_support_reads(bam_file, vcf_file, chr, start_pos, end_pos)
-    p_value, ref_reads, alt_reads, var_pos = calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id)
-    return gene_id, gene_name, chr, var_pos, p_value, ref_reads, alt_reads
+    ase_p_value, ref_reads, alt_reads, ase_var_pos = calculate_ase_pvalue(isoquant_read_assignments,
+                                                                          support_reads,
+                                                                          gene_id)
+    asts_p_value, asts_var_pos, isoforms_str, contingency_table_str = calculate_asts_pvalue(isoquant_read_assignments,
+                                                                                            support_reads,
+                                                                                            gene_id)
+    return gene_id, gene_name, chr, ase_var_pos, ase_p_value, ref_reads, alt_reads, \
+        asts_var_pos, asts_p_value, isoforms_str, contingency_table_str
 
 
-def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file, output_file, threads, gene_types,
+# def analyze_asts(bam_file, vcf_file, gene_id, gene_region, gene_name, isoquant_read_assignments):
+#     chr = gene_region["chr"]
+#     start_pos = gene_region["start"]  # 1-based, start-inclusive
+#     end_pos = gene_region["end"]  # 1-based, end-inclusive
+#     support_reads = get_support_reads(bam_file, vcf_file, chr, start_pos, end_pos)
+#     p_value, variant_pos, isoforms, contingency_table = calculate_asts_pvalue(isoquant_read_assignments, support_reads,
+#                                                                               gene_id)
+#     return gene_id, gene_name, chr, variant_pos, p_value, isoforms, contingency_table
+
+
+def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file, output_prefix, threads, gene_types,
                            assignment_type, classification_type):
     isoquant_read_assignments = parse_isoquant_read_assignment(assignment_file, assignment_type, classification_type)
     gene_regions, gene_names = get_gene_regions(annotation_file, gene_types)
@@ -306,13 +368,18 @@ def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file,
         shared_assignments = manager.dict(isoquant_read_assignments)
         with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
             # Submit all tasks at once without chunking
-            futures = [executor.submit(analyze_ase_genes, *gene_data, shared_assignments) for gene_data in gene_args]
+            futures = [executor.submit(analyze_ase_asts, *gene_data, shared_assignments) for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    with open(output_file, "w") as f:
-        f.write("Gene\tChr\tPos\tRef\tAlt\tP-value\n")
-        for gene_id, gene_name, chr, pos, p_value, ref_reads, alt_reads in results:
-            f.write(f"{gene_name}\t{chr}\t{pos}\t{ref_reads}\t{alt_reads}\t{p_value}\n")
+    fase = open(output_prefix + ".ase.tsv", "w")
+    fase.write("Gene\tChr\tPos\tRef\tAlt\tP-value\n")
+    fasts = open(output_prefix + ".asts.tsv", "w")
+    fasts.write("Gene\tChr\tPos\tP-value\tIsoforms\tTable\n")
+    for gene_id, gene_name, chr, ase_var_pos, ase_p_value, ref_reads, alt_reads, asts_var_pos, asts_p_value, isoforms_str, contingency_table_str in results:
+        fase.write(f"{gene_name}\t{chr}\t{ase_var_pos}\t{ref_reads}\t{alt_reads}\t{ase_p_value}\n")
+        fasts.write(f"{gene_name}\t{chr}\t{asts_var_pos}\t{asts_p_value}\t{isoforms_str}\t{contingency_table_str}\n")
+    fase.close()
+    fasts.close()
 
 
 if __name__ == "__main__":
@@ -321,7 +388,7 @@ if __name__ == "__main__":
     parse.add_argument("-v", "--vcf_file", help="VCF file", required=True)
     parse.add_argument("-a", "--annotation_file", help="Annotation file", required=True)
     parse.add_argument("-i", "--assignment_file", help="Assignment file", required=True)
-    parse.add_argument("-o", "--output_file", help="Output file", required=True)
+    parse.add_argument("-o", "--output_prefix", help="Prefix of output file", required=True)
     parse.add_argument("-t", "--threads", help="Number of threads", type=int, default=1)
     parse.add_argument("--gene_types", help="Gene types", nargs="+", default=["protein_coding", "lncRNA"])
     parse.add_argument("--assignment_type", help="Assignment type", nargs="+",
@@ -329,5 +396,5 @@ if __name__ == "__main__":
     parse.add_argument("--classification_type", help="Classification type", nargs="+",
                        default={"full_splice_match", "incomplete_splice_match", "mono_exon_match"})
     args = parse.parse_args()
-    multiple_processes_run(args.bam_file, args.vcf_file, args.annotation_file, args.assignment_file, args.output_file,
+    multiple_processes_run(args.bam_file, args.vcf_file, args.annotation_file, args.assignment_file, args.output_prefix,
                            args.threads, args.gene_types, args.assignment_type, args.classification_type)
