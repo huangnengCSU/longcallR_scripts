@@ -7,7 +7,8 @@ import networkx as nx
 
 import numpy as np
 import pysam
-from scipy.stats import fisher_exact, power_divergence
+from scipy.stats import fisher_exact, power_divergence, chi2
+from statsmodels.stats.multitest import multipletests
 from intervaltree import IntervalTree
 
 
@@ -481,6 +482,8 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
     gene_ase_events = []
 
     # Analyze junction regions
+    asj_p_values = []
+    asj_sors = []
     for junc_cluster in junctions_clusters:
         if len(junc_cluster) == 0:
             continue
@@ -493,16 +496,26 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             test_results = haplotype_event_test(absences, presents, reads_tags)
             for event in test_results:
                 (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = event
+                asj_p_values.append(pvalue)
+                asj_sors.append(sor)
                 if pvalue == 0:
                     gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
                                                     junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
                 elif pvalue < p_value_threshold and sor >= sor_threshold:
                     gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
                                                     junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
-    return gene_ase_events
+    ## Fisher's method to combine p-values
+    if asj_p_values:
+        min_p_value_index = np.argmin(asj_p_values)
+        most_significant_sor = asj_sors[min_p_value_index]
+        X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
+        dof = 2 * len(asj_p_values)
+        combined_asj_p_value = chi2.sf(X2, dof)
+        return (gene_ase_events, gene_name, combined_asj_p_value, most_significant_sor)
+    return (gene_ase_events, gene_name, 1.0, 0.0)
 
 
-def analyze(annotation_file, bam_file, output_file, min_count, threads, p_value_threshold, sor_threshold):
+def analyze(annotation_file, bam_file, output_prefix, min_count, threads, p_value_threshold, sor_threshold):
     all_ase_events = {}  # key: (chr, start, end), value: AseEvent
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
         annotation_file)
@@ -512,6 +525,7 @@ def analyze(annotation_file, bam_file, output_file, min_count, threads, p_value_
                        anno_intron_regions[gene_id], gene_region, bam_file, min_count, p_value_threshold, sor_threshold)
                       for gene_id, gene_region in anno_gene_regions.items()]
 
+    asj_gene_names, asj_gene_pvalues, asj_gene_sors = [], [], []
     # Use ProcessPoolExecutor for multiprocessing
     with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
         # Submit tasks and collect futures
@@ -519,8 +533,11 @@ def analyze(annotation_file, bam_file, output_file, min_count, threads, p_value_
 
         # As each future completes, collect the results
         for future in concurrent.futures.as_completed(futures):
-            # all_ase_events.extend(future.result().values())  # Waits for the future to complete and gets the result
-            for event in future.result():
+            (gene_ase_events, gene_name, asj_pvalue, asj_sor) = future.result()
+            asj_gene_names.append(gene_name)
+            asj_gene_pvalues.append(asj_pvalue)
+            asj_gene_sors.append(asj_sor)
+            for event in gene_ase_events:
                 if (event.chr, event.start, event.end) in all_ase_events.keys():
                     tmp_event = all_ase_events[(event.chr, event.start, event.end)]
                     if event.p_value < tmp_event.p_value:
@@ -538,17 +555,27 @@ def analyze(annotation_file, bam_file, output_file, min_count, threads, p_value_
                     all_ase_events[(event.chr, event.start, event.end)] = event
 
     # write to output file
-    with open(output_file, "w") as f:
+    with open(output_prefix + '.diff_splice.tsv', "w") as f:
         f.write(AseEvent.__header__() + "\n")
         for key, event in all_ase_events.items():
             f.write(event.__str__() + "\n")
+
+    # apply Benjamini–Hochberg correction
+    reject, adjusted_p_values, _, _ = multipletests(asj_gene_pvalues, alpha=0.05, method='fdr_bh')
+    # write ASJ gene
+    with open(output_prefix + ".asj_gene.tsv", "w") as f:
+        f.write(f"#Gene_name\tP_value\tSOR\n")
+        for gene_name, p_value, sor in zip(asj_gene_names, adjusted_p_values, asj_gene_sors):
+            f.write(f"{gene_name}\t{p_value}\t{sor}\n")
 
 
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
     parse.add_argument("-a", "--annotation_file", help="Annotation file in GFF3 or GTF format", required=True)
     parse.add_argument("-b", "--bam_file", help="BAM file", required=True)
-    parse.add_argument("-o", "--output_file", help="Output file", required=True)
+    parse.add_argument("-o", "--output_prefix",
+                       help="prefix of output differential splicing file and allele-specific junctions file",
+                       required=True)
     parse.add_argument("-t", "--threads", help="Number of threads", default=1, type=int)
     parse.add_argument("-m", "--min_sup", help="Minimum support of phased reads for exon or junction", default=10,
                        type=int)
@@ -557,5 +584,5 @@ if __name__ == "__main__":
     parse.add_argument("-s", "--sor_threshold", help="SOR threshold for filtering, higher value is more stringent",
                        default=2.0, type=float)
     args = parse.parse_args()
-    analyze(args.annotation_file, args.bam_file, args.output_file, args.min_sup, args.threads, args.p_value_threshold,
+    analyze(args.annotation_file, args.bam_file, args.output_prefix, args.min_sup, args.threads, args.p_value_threshold,
             args.sor_threshold)
