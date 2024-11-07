@@ -185,6 +185,7 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
     p_values = []
     pos_list = []
     ref_alt_counts = []
+    max_ref_alt_counts = (0, 0)
 
     # Step 1: Collect p-values
     for pos in candidates:
@@ -203,6 +204,9 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
             p_values.append(p_value_ase)
             pos_list.append(pos)
             ref_alt_counts.append((len(shared_ref_reads), len(shared_alt_reads)))
+        else:
+            if len(shared_ref_reads) + len(shared_alt_reads) > sum(max_ref_alt_counts):
+                max_ref_alt_counts = (len(shared_ref_reads), len(shared_alt_reads))
 
     # # Step 2: Apply Benjamini–Hochberg correction
     # if p_values:
@@ -226,8 +230,9 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
         combined_p_value = chi2.sf(X2, dof)
         return combined_p_value, ref_reads_num, alt_reads_num, most_significant_pos
 
-    # If no significant p-values, return default values
-    return 1.0, 0, 0, None
+    # If no significant p-values, return default values, and the coverage of ref and alt alleles
+    ref_reads_num, alt_reads_num = max_ref_alt_counts
+    return 1.0, ref_reads_num, alt_reads_num, None
 
 
 def calculate_asts_pvalue(isoquant_read_assignments, support_reads, gene_id):
