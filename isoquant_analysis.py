@@ -62,7 +62,10 @@ def load_longcallR_phased_vcf(vcf_file):
 
 def parse_isoquant_read_assignment(assignment_file, assignment_type, classification_type):
     records = {}
-    with open(assignment_file) as f:
+    # Determine the open function based on file extension
+    open_func = gzip.open if assignment_file.endswith('.gz') else open
+
+    with open_func(assignment_file, 'rt') as f:  # 'rt' mode for reading text in gzipped file
         for line in f:
             if line.startswith("#"):
                 continue
