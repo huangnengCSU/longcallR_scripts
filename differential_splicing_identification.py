@@ -12,13 +12,12 @@ from statsmodels.stats.multitest import multipletests
 from intervaltree import IntervalTree
 
 
-def get_gene_regions(annotation_file):
+def get_gene_regions(annotation_file, gene_types):
     """Parse gene, exon, and intron regions from a GFF3 or GTF file.
     :param annotation_file: Path to the annotation file
     :return: Gene regions, exon regions, and intron regions
     """
-    assert annotation_file.endswith(
-        (".gff3", ".gtf", ".gff3.gz", ".gtf.gz")), "Error: Unsupported annotation file format"
+    assert annotation_file.endswith((".gff3", ".gtf", ".gff3.gz", ".gtf.gz")), "Error: Unknown annotation file format"
 
     gene_regions = {}
     gene_names = {}
@@ -68,13 +67,13 @@ def get_gene_regions(annotation_file):
                     gene_name = attr_dict["gene_name"]
                 except KeyError:
                     gene_name = "."  # Use a placeholder if gene name is not available
-                if gene_type != "processed_pseudogene":
+                if gene_type in gene_types:
                     process_gene(parts, gene_id, gene_name)
             elif feature_type == "exon":
                 gene_type = attr_dict["gene_type"]
                 transcript_id = attr_dict["transcript_id"]
                 gene_id = attr_dict["gene_id"]
-                if gene_type != "processed_pseudogene":
+                if gene_type in gene_types:
                     process_exon(parts, gene_id, transcript_id)
 
     open_func = gzip.open if annotation_file.endswith(".gz") else open
@@ -515,10 +514,10 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
     return (gene_ase_events, gene_name, 1.0, 0.0)
 
 
-def analyze(annotation_file, bam_file, output_prefix, min_count, threads, p_value_threshold, sor_threshold):
+def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, threads, p_value_threshold, sor_threshold):
     all_ase_events = {}  # key: (chr, start, end), value: AseEvent
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
-        annotation_file)
+        annotation_file, gene_types)
 
     # Prepare data for multiprocessing
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
@@ -577,6 +576,8 @@ if __name__ == "__main__":
                        help="prefix of output differential splicing file and allele-specific junctions file",
                        required=True)
     parse.add_argument("-t", "--threads", help="Number of threads", default=1, type=int)
+    parse.add_argument("-g", "--gene_types", type=str, nargs="+", default=["protein_coding", "lncRNA"],
+                       help='Gene types to be analyzed. Default is ["protein_coding", "lncRNA"]', )
     parse.add_argument("-m", "--min_sup", help="Minimum support of phased reads for exon or junction", default=10,
                        type=int)
     parse.add_argument("-p", "--p_value_threshold", help="P-value threshold for Fisher's exact test", default=1e-15,
@@ -584,5 +585,5 @@ if __name__ == "__main__":
     parse.add_argument("-s", "--sor_threshold", help="SOR threshold for filtering, higher value is more stringent",
                        default=2.0, type=float)
     args = parse.parse_args()
-    analyze(args.annotation_file, args.bam_file, args.output_prefix, args.min_sup, args.threads, args.p_value_threshold,
-            args.sor_threshold)
+    analyze(args.annotation_file, args.bam_file, args.output_prefix, args.min_sup, args.gene_types, args.threads,
+            args.p_value_threshold, args.sor_threshold)
