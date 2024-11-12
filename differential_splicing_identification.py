@@ -510,8 +510,8 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
         dof = 2 * len(asj_p_values)
         combined_asj_p_value = chi2.sf(X2, dof)
-        return (gene_ase_events, gene_name, combined_asj_p_value, most_significant_sor)
-    return (gene_ase_events, gene_name, 1.0, 0.0)
+        return (gene_ase_events, gene_name, chr, combined_asj_p_value, most_significant_sor)
+    return (gene_ase_events, gene_name, chr, 1.0, 0.0)
 
 
 def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, threads, p_value_threshold, sor_threshold):
@@ -524,7 +524,7 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
                        anno_intron_regions[gene_id], gene_region, bam_file, min_count, p_value_threshold, sor_threshold)
                       for gene_id, gene_region in anno_gene_regions.items()]
 
-    asj_gene_names, asj_gene_pvalues, asj_gene_sors = [], [], []
+    asj_gene_names, asj_gene_chrs, asj_gene_pvalues, asj_gene_sors = [], [], [], []
     # Use ProcessPoolExecutor for multiprocessing
     with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
         # Submit tasks and collect futures
@@ -532,8 +532,9 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
 
         # As each future completes, collect the results
         for future in concurrent.futures.as_completed(futures):
-            (gene_ase_events, gene_name, asj_pvalue, asj_sor) = future.result()
+            (gene_ase_events, gene_name, chrom, asj_pvalue, asj_sor) = future.result()
             asj_gene_names.append(gene_name)
+            asj_gene_chrs.append(chrom)
             asj_gene_pvalues.append(asj_pvalue)
             asj_gene_sors.append(asj_sor)
             for event in gene_ase_events:
@@ -563,9 +564,9 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
     reject, adjusted_p_values, _, _ = multipletests(asj_gene_pvalues, alpha=0.05, method='fdr_bh')
     # write ASJ gene
     with open(output_prefix + ".asj_gene.tsv", "w") as f:
-        f.write(f"#Gene_name\tP_value\tSOR\n")
-        for gene_name, p_value, sor in zip(asj_gene_names, adjusted_p_values, asj_gene_sors):
-            f.write(f"{gene_name}\t{p_value}\t{sor}\n")
+        f.write(f"#Gene_name\tChr\tP_value\tSOR\n")
+        for gene_name, chrom, p_value, sor in zip(asj_gene_names, asj_gene_chrs, adjusted_p_values, asj_gene_sors):
+            f.write(f"{gene_name}\t{chrom}\t{p_value}\t{sor}\n")
 
 
 if __name__ == "__main__":
