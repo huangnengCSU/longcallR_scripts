@@ -208,27 +208,27 @@ def calculate_ase_pvalue(isoquant_read_assignments, support_reads, gene_id):
             if len(shared_ref_reads) + len(shared_alt_reads) > sum(max_ref_alt_counts):
                 max_ref_alt_counts = (len(shared_ref_reads), len(shared_alt_reads))
 
-    # # Step 2: Apply Benjamini–Hochberg correction
-    # if p_values:
-    #     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-    #
-    #     # Step 3: Find the most significant position with the lowest adjusted p-value
-    #     min_p_value_index = adjusted_p_values.argmin()
-    #     most_significant_pos = pos_list[min_p_value_index]
-    #     ref_reads_num, alt_reads_num = ref_alt_counts[min_p_value_index]
-    #     adjusted_p_value = adjusted_p_values[min_p_value_index]
-    #
-    #     return adjusted_p_value, ref_reads_num, alt_reads_num, most_significant_pos
-
-    # step 2: fisher's method
+    # Step 2: Apply Benjamini–Hochberg correction
     if p_values:
-        min_p_value_index = np.argmin(p_values)
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+        # Step 3: Find the most significant position with the lowest adjusted p-value
+        min_p_value_index = adjusted_p_values.argmin()
         most_significant_pos = pos_list[min_p_value_index]
         ref_reads_num, alt_reads_num = ref_alt_counts[min_p_value_index]
-        X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-        dof = 2 * len(p_values)
-        combined_p_value = chi2.sf(X2, dof)
-        return combined_p_value, ref_reads_num, alt_reads_num, most_significant_pos
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+
+        return adjusted_p_value, ref_reads_num, alt_reads_num, most_significant_pos
+
+    # # step 2: fisher's method
+    # if p_values:
+    #     min_p_value_index = np.argmin(p_values)
+    #     most_significant_pos = pos_list[min_p_value_index]
+    #     ref_reads_num, alt_reads_num = ref_alt_counts[min_p_value_index]
+    #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+    #     dof = 2 * len(p_values)
+    #     combined_p_value = chi2.sf(X2, dof)
+    #     return combined_p_value, ref_reads_num, alt_reads_num, most_significant_pos
 
     # If no significant p-values, return default values, and the coverage of ref and alt alleles
     ref_reads_num, alt_reads_num = max_ref_alt_counts
@@ -266,23 +266,10 @@ def calculate_asts_pvalue(isoquant_read_assignments, support_reads, gene_id):
             cand_isoforms.append(isoform_ids)
             cand_contingency_table.append(contingency_table)
 
-    # # Apply Benjamini–Hochberg correction
-    # if p_values:
-    #     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-    #     min_p_value_index = adjusted_p_values.argmin()
-    #     most_significant_pos = cand_variant_positions[min_p_value_index]
-    #     most_significant_isoforms = cand_isoforms[min_p_value_index]
-    #     isoforms_str = ",".join(most_significant_isoforms)
-    #     most_significant_contingency_table = cand_contingency_table[min_p_value_index]
-    #     contingency_table_str = ",".join(
-    #         [f"{most_significant_contingency_table[0][i]}:{most_significant_contingency_table[1][i]}" for i in
-    #          range(len(most_significant_isoforms))])
-    #     adjusted_p_value = adjusted_p_values[min_p_value_index]
-    #     return adjusted_p_value, most_significant_pos, isoforms_str, contingency_table_str
-
-    # step 2: fisher's method
+    # Apply Benjamini–Hochberg correction
     if p_values:
-        min_p_value_index = np.argmin(p_values)
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+        min_p_value_index = adjusted_p_values.argmin()
         most_significant_pos = cand_variant_positions[min_p_value_index]
         most_significant_isoforms = cand_isoforms[min_p_value_index]
         isoforms_str = ",".join(most_significant_isoforms)
@@ -290,10 +277,23 @@ def calculate_asts_pvalue(isoquant_read_assignments, support_reads, gene_id):
         contingency_table_str = ",".join(
             [f"{most_significant_contingency_table[0][i]}:{most_significant_contingency_table[1][i]}" for i in
              range(len(most_significant_isoforms))])
-        X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-        dof = 2 * len(p_values)
-        combined_p_value = chi2.sf(X2, dof)
-        return combined_p_value, most_significant_pos, isoforms_str, contingency_table_str
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+        return adjusted_p_value, most_significant_pos, isoforms_str, contingency_table_str
+
+    # # step 2: fisher's method
+    # if p_values:
+    #     min_p_value_index = np.argmin(p_values)
+    #     most_significant_pos = cand_variant_positions[min_p_value_index]
+    #     most_significant_isoforms = cand_isoforms[min_p_value_index]
+    #     isoforms_str = ",".join(most_significant_isoforms)
+    #     most_significant_contingency_table = cand_contingency_table[min_p_value_index]
+    #     contingency_table_str = ",".join(
+    #         [f"{most_significant_contingency_table[0][i]}:{most_significant_contingency_table[1][i]}" for i in
+    #          range(len(most_significant_isoforms))])
+    #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+    #     dof = 2 * len(p_values)
+    #     combined_p_value = chi2.sf(X2, dof)
+    #     return combined_p_value, most_significant_pos, isoforms_str, contingency_table_str
 
     return 1.0, None, None, None
 
@@ -408,17 +408,15 @@ def multiple_processes_run(bam_file, vcf_file, annotation_file, assignment_file,
     fase.write("Gene\tChr\tPos\tRef\tAlt\tP-value\n")
     fasts = open(output_prefix + ".asts.tsv", "w")
     fasts.write("Gene\tChr\tPos\tP-value\tIsoforms\tTable\n")
-    # Apply Benjamini–Hochberg correction
-    ase_pvalues = np.array([result[4] for result in results])
-    asts_p_values = np.array([result[8] for result in results])
-    reject_ase, adjusted_ase_p_values, _, _ = multipletests(ase_pvalues, alpha=0.05, method='fdr_bh')
-    reject_asts, adjusted_asts_p_values, _, _ = multipletests(asts_p_values, alpha=0.05, method='fdr_bh')
-    for idx, (
-            gene_id, gene_name, chr, ase_var_pos, ase_p_value, ref_reads, alt_reads, asts_var_pos, asts_p_value,
-            isoforms_str,
-            contingency_table_str) in enumerate(results):
-        ase_p_value = adjusted_ase_p_values[idx]
-        asts_p_value = adjusted_asts_p_values[idx]
+    # # Apply Benjamini–Hochberg correction
+    # ase_pvalues = np.array([result[4] for result in results])
+    # asts_p_values = np.array([result[8] for result in results])
+    # reject_ase, adjusted_ase_p_values, _, _ = multipletests(ase_pvalues, alpha=0.05, method='fdr_bh')
+    # reject_asts, adjusted_asts_p_values, _, _ = multipletests(asts_p_values, alpha=0.05, method='fdr_bh')
+    for idx, (gene_id, gene_name, chr, ase_var_pos, ase_p_value, ref_reads, alt_reads, asts_var_pos, asts_p_value,
+              isoforms_str, contingency_table_str) in enumerate(results):
+        # ase_p_value = adjusted_ase_p_values[idx]
+        # asts_p_value = adjusted_asts_p_values[idx]
         fase.write(f"{gene_name}\t{chr}\t{ase_var_pos}\t{ref_reads}\t{alt_reads}\t{ase_p_value}\n")
         fasts.write(f"{gene_name}\t{chr}\t{asts_var_pos}\t{asts_p_value}\t{isoforms_str}\t{contingency_table_str}\n")
     fase.close()

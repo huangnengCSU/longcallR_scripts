@@ -503,14 +503,23 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
                 elif pvalue < p_value_threshold and sor >= sor_threshold:
                     gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
                                                     junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
-    ## Fisher's method to combine p-values
+    # ## Fisher's method to combine p-values
+    # if asj_p_values:
+    #     min_p_value_index = np.argmin(asj_p_values)
+    #     most_significant_sor = asj_sors[min_p_value_index]
+    #     X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
+    #     dof = 2 * len(asj_p_values)
+    #     combined_asj_p_value = chi2.sf(X2, dof)
+    #     return (gene_ase_events, gene_name, chr, combined_asj_p_value, most_significant_sor)
+    # return (gene_ase_events, gene_name, chr, 1.0, 0.0)
+
+    # apply Benjamini–Hochberg correction
     if asj_p_values:
-        min_p_value_index = np.argmin(asj_p_values)
+        reject, adjusted_p_values, _, _ = multipletests(asj_p_values, alpha=0.05, method='fdr_bh')
+        min_p_value_index = np.argmin(adjusted_p_values)
         most_significant_sor = asj_sors[min_p_value_index]
-        X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
-        dof = 2 * len(asj_p_values)
-        combined_asj_p_value = chi2.sf(X2, dof)
-        return (gene_ase_events, gene_name, chr, combined_asj_p_value, most_significant_sor)
+        most_significant_p_value = adjusted_p_values[min_p_value_index]
+        return (gene_ase_events, gene_name, chr, most_significant_p_value, most_significant_sor)
     return (gene_ase_events, gene_name, chr, 1.0, 0.0)
 
 
@@ -560,12 +569,12 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
         for key, event in all_ase_events.items():
             f.write(event.__str__() + "\n")
 
-    # apply Benjamini–Hochberg correction
-    reject, adjusted_p_values, _, _ = multipletests(asj_gene_pvalues, alpha=0.05, method='fdr_bh')
+    # # apply Benjamini–Hochberg correction
+    # reject, adjusted_p_values, _, _ = multipletests(asj_gene_pvalues, alpha=0.05, method='fdr_bh')
     # write ASJ gene
     with open(output_prefix + ".asj_gene.tsv", "w") as f:
         f.write(f"#Gene_name\tChr\tP_value\tSOR\n")
-        for gene_name, chrom, p_value, sor in zip(asj_gene_names, asj_gene_chrs, adjusted_p_values, asj_gene_sors):
+        for gene_name, chrom, p_value, sor in zip(asj_gene_names, asj_gene_chrs, asj_gene_pvalues, asj_gene_sors):
             f.write(f"{gene_name}\t{chrom}\t{p_value}\t{sor}\n")
 
 

@@ -308,27 +308,27 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, i
         phase_sets.append(ps)
         hap_counts.append((hap_count[1], hap_count[2]))
 
-    # # Step 2: Apply Benjamini–Hochberg correction
-    # if p_values:
-    #     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-    #
-    #     # Step 3: Find the most significant adjusted p-value
-    #     min_p_value_index = adjusted_p_values.argmin()
-    #     most_significant_phase_set = phase_sets[min_p_value_index]
-    #     h1_count, h2_count = hap_counts[min_p_value_index]
-    #     adjusted_p_value = adjusted_p_values[min_p_value_index]
-    #
-    #     return (gene_name, adjusted_p_value, most_significant_phase_set, h1_count, h2_count)
-
-    # fisher's method
+    # Step 2: Apply Benjamini–Hochberg correction
     if p_values:
-        min_p_value_index = np.argmin(p_values)
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+        # Step 3: Find the most significant adjusted p-value
+        min_p_value_index = adjusted_p_values.argmin()
         most_significant_phase_set = phase_sets[min_p_value_index]
         h1_count, h2_count = hap_counts[min_p_value_index]
-        X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-        dof = 2 * len(p_values)
-        combined_p_value = chi2.sf(X2, dof)
-        return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set, h1_count, h2_count)
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
+
+        return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set, h1_count, h2_count)
+
+    # # fisher's method
+    # if p_values:
+    #     min_p_value_index = np.argmin(p_values)
+    #     most_significant_phase_set = phase_sets[min_p_value_index]
+    #     h1_count, h2_count = hap_counts[min_p_value_index]
+    #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+    #     dof = 2 * len(p_values)
+    #     combined_p_value = chi2.sf(X2, dof)
+    #     return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set, h1_count, h2_count)
 
     # If no valid p-values are found, return defaults
     return (gene_name, gene_region["chr"], 1.0, ".", 0, 0)
@@ -366,14 +366,22 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
         phase_sets.append(ps)
         hap_counts.append((hap_count[1], hap_count[2]))
 
-    # Step 2: fisher's method
+
     if p_values:
-        min_p_value_index = np.argmin(p_values)
+        # # Step 2: fisher's method
+        # min_p_value_index = np.argmin(p_values)
+        # most_significant_phase_set = phase_sets[min_p_value_index]
+        # h1_count, h2_count = hap_counts[min_p_value_index]
+        # X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+        # dof = 2 * len(p_values)
+        # combined_p_value = chi2.sf(X2, dof)
+
+        # apply Benjamini–Hochberg correction
+        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+        min_p_value_index = adjusted_p_values.argmin()
         most_significant_phase_set = phase_sets[min_p_value_index]
         h1_count, h2_count = hap_counts[min_p_value_index]
-        X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-        dof = 2 * len(p_values)
-        combined_p_value = chi2.sf(X2, dof)
+        adjusted_p_value = adjusted_p_values[min_p_value_index]
 
         # determine paternal and maternal alleles for H1 and H2
         ps_variants = rna_vcfs.get(most_significant_phase_set, [])
@@ -418,7 +426,7 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
                     h2_mat_cnt += 1
                 else:
                     continue
-        return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set,
+        return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set,
                 h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
 
     # If no valid p-values are found, return defaults
@@ -442,13 +450,13 @@ def analyze_ase_genes(assignment_file, annotation_file, bam_file, out_file, thre
             futures = [executor.submit(calculate_ase_pvalue, *gene_data, shared_assignments) for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    # apply Benjamini–Hochberg correction
-    p_values = [result[2] for result in results]
-    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    # # apply Benjamini–Hochberg correction
+    # p_values = [result[2] for result in results]
+    # reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
         f.write("Gene\tChr\tPS\tH1\tH2\tP-value\n")
         for idx, (gene_name, chrom, p_value, ps, h1, h2) in enumerate(results):
-            p_value = adjusted_p_values[idx]
+            # p_value = adjusted_p_values[idx]
             f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\n")
 
 
@@ -474,13 +482,13 @@ def analyze_ase_genes_pat_mat(assignment_file, annotation_file, bam_file, vcf_fi
                                        shared_wg_vcfs) for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    # apply Benjamini–Hochberg correction
-    p_values = [result[2] for result in results]
-    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    # # apply Benjamini–Hochberg correction
+    # p_values = [result[2] for result in results]
+    # reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
         f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
         for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat) in enumerate(results):
-            p_value = adjusted_p_values[idx]
+            # p_value = adjusted_p_values[idx]
             f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
 
 
