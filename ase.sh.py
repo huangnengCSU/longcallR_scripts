@@ -140,7 +140,7 @@ def assign_reads_to_gene(bam_file, merged_genes_exons):
     for chrom in merged_genes_exons.keys():
         for gene_id, merged_exons in merged_genes_exons[chrom].items():
             gene_region = (merged_exons[0][0], merged_exons[-1][1])  # 1-based, start-inclusive, end-inclusive
-            trees[chrom].add(Interval(gene_region[0], gene_region[1] + 1), gene_id)
+            trees[chrom].add(Interval(gene_region[0], gene_region[1] + 1, gene_id))
 
             # Build IntervalTree for exon regions within the gene
             for exon_start, exon_end in merged_exons:
@@ -183,7 +183,7 @@ def assign_reads_to_gene(bam_file, merged_genes_exons):
                 overlap_length = 0
                 for splice_region in splice_regions:
                     overlap_length += sum(
-                        interval.end - interval.begin
+                        max(0, min(splice_region[1], interval.end - 1) - max(splice_region[0], interval.begin) + 1)
                         for interval in gene_intervals[chromosome][gene_id].overlap(*splice_region)
                     )
                 # read_overlap_length[gene_id] = overlap_length
