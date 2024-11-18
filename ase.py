@@ -1,3 +1,4 @@
+import math
 import pysam
 from collections import defaultdict
 import gzip
@@ -137,8 +138,8 @@ def merge_gene_exon_regions(exon_regions):
 def assign_reads_to_gene(bam_file, merged_genes_exons):
     """Assign reads to genes based on their alignment positions."""
 
-    # read_assignment, key: read_name, value: directory of gene_id: overlap_length
-    read_assignment = defaultdict(lambda: defaultdict(int))
+    # read_assignment, key: read_name, value: gene_id
+    read_assignment = {}
 
     trees = defaultdict(IntervalTree)  # key: chr, value: IntervalTree
     gene_intervals = defaultdict(lambda: defaultdict(IntervalTree))  # key: chr, value: dict of gene_id: IntervalTree
@@ -180,7 +181,7 @@ def assign_reads_to_gene(bam_file, merged_genes_exons):
             if shift > 0:
                 splice_regions.append((current_pos, current_pos + shift - 1))
 
-            # read_overlap_length = {}  # key: gene_id, value: overlap_length
+            read_overlap_length = {}  # key: gene_id, value: overlap_length
             # calculate the overlap of splice regions with gene exons to determine assignment of read to gene
             for gene_id in candidate_gene_ids:
                 if gene_id not in gene_intervals[chromosome]:
@@ -191,19 +192,107 @@ def assign_reads_to_gene(bam_file, merged_genes_exons):
                         max(0, min(splice_region[1], interval.end - 1) - max(splice_region[0], interval.begin) + 1)
                         for interval in gene_intervals[chromosome][gene_id].overlap(*splice_region)
                     )
-                # read_overlap_length[gene_id] = overlap_length
-                read_assignment[read.query_name][gene_id] = overlap_length
+                read_overlap_length[gene_id] = overlap_length
+            if read_overlap_length:
+                best_gene_id = max(read_overlap_length, key=read_overlap_length.get)
+                read_assignment[read.query_name] = best_gene_id
+    return read_assignment
+
+
+def process_chunk(bam_file, chromosome, start, end, shared_tree, shared_gene_intervals):
+    read_assignment = {}
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        for read in bam.fetch(chromosome, start, end):
+            if read.is_unmapped:
+                continue
+            start_pos = read.reference_start
+            end_pos = read.reference_end
+
+            # query should be 1-based, left-inclusive, right-exclusive
+            overlapping_intervals = shared_tree.overlap(start_pos + 1, end_pos + 1)
+            candidate_gene_ids = [interval.data for interval in overlapping_intervals]
+
+            # parse cigar string to get the splice alignment regions
+            cigar = read.cigartuples
+            splice_regions = []  # list of splice alignment positions of a read, 1-based and start/end inclusive
+            current_pos = start_pos + 1  # 1-based
+            shift = 0
+            for operation, length in cigar:
+                if operation in {0, 2, 7, 8}:
+                    shift += length
+                elif operation == 3:
+                    if shift > 0:
+                        splice_regions.append((current_pos, current_pos + shift - 1))
+                    current_pos += (shift + length)  # Move past the skipped region
+                    shift = 0
+            if shift > 0:
+                splice_regions.append((current_pos, current_pos + shift - 1))
+
+            read_overlap_length = {}  # key: gene_id, value: overlap_length
+            # calculate the overlap of splice regions with gene exons to determine assignment of read to gene
+            for gene_id in candidate_gene_ids:
+                if gene_id not in shared_gene_intervals:
+                    continue
+                overlap_length = 0
+                for splice_region in splice_regions:
+                    overlap_length += sum(
+                        max(0, min(splice_region[1], interval.end - 1) - max(splice_region[0], interval.begin) + 1)
+                        for interval in shared_gene_intervals[gene_id].overlap(*splice_region)
+                    )
+                read_overlap_length[gene_id] = overlap_length
+            if read_overlap_length:
+                best_gene_id = max(read_overlap_length, key=read_overlap_length.get)
+                read_assignment[read.query_name] = best_gene_id
+    return read_assignment
+
+
+def assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads):
+    """Assign reads to genes based on their alignment positions."""
+
+    # read_assignment, key: read_name, value: gene_id
+    read_assignment = {}
+
+    trees_by_chr = defaultdict(IntervalTree)  # key: chr, value: IntervalTree
+    gene_intervals_by_chr = defaultdict(
+        lambda: defaultdict(IntervalTree))  # key: chr, value: dict of gene_id: IntervalTree
+    for chrom in merged_genes_exons.keys():
+        for gene_id, merged_exons in merged_genes_exons[chrom].items():
+            gene_region = (merged_exons[0][0], merged_exons[-1][1])  # 1-based, start-inclusive, end-inclusive
+            trees_by_chr[chrom].add(Interval(gene_region[0], gene_region[1] + 1, gene_id))
+
+            # Build IntervalTree for exon regions within the gene
+            for exon_start, exon_end in merged_exons:
+                gene_intervals_by_chr[chrom][gene_id].add(Interval(exon_start, exon_end + 1))
+
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        chromosomes = bam.references
+        chromosome_lengths = dict(zip(bam.references, bam.lengths))
+
+    chunks = []
+    for chromosome in chromosomes:
+        total_length = chromosome_lengths[chromosome]
+        chunk_size = max(1, math.ceil(total_length / threads))
+        for i in range(threads):
+            start = i * chunk_size  # 0-based, inclusive
+            end = min((i + 1) * chunk_size, total_length)  # 0-based, exclusive
+            tree = trees_by_chr[chromosome]
+            gene_intervals = gene_intervals_by_chr[chromosome]
+            chunks.append((bam_file, chromosome, start, end, tree, gene_intervals))
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
+        futures = [executor.submit(process_chunk, *chunk) for chunk in chunks]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            read_assignment.update(result)
+
     return read_assignment
 
 
 def transform_read_assignment(read_assignment):
     """select the best gene assignment for each read"""
     gene_assigned_reads = defaultdict(list)  # key: gene_id, value: list of read_name
-    for read_name, gene_overlap in read_assignment.items():
-        if gene_overlap:
-            sorted_overlap_lengths = sorted(gene_overlap.items(), key=lambda x: x[1], reverse=True)
-            best_gene_id = sorted_overlap_lengths[0][0]
-            gene_assigned_reads[best_gene_id].append(read_name)
+    for read_name, gene_id in read_assignment.items():
+        gene_assigned_reads[gene_id].append(read_name)
     return gene_assigned_reads
 
 
@@ -379,7 +468,8 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
 
         # determine paternal and maternal alleles for H1 and H2
         ps_variants = rna_vcfs.get(most_significant_phase_set, [])
-        ps_reads = [rname for rname in assigned_reads if rname in reads_tag and reads_tag[rname]["PS"] == most_significant_phase_set]
+        ps_reads = [rname for rname in assigned_reads if
+                    rname in reads_tag and reads_tag[rname]["PS"] == most_significant_phase_set]
         h1_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 1]
         h2_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 2]
 
@@ -428,13 +518,10 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
 
 
 def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, min_support):
-    # isoquant_read_assignments = parse_isoquant_read_assignment(assignment_file, assignment_type, classification_type)
-    start = time.time()
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
-    read_assignment = assign_reads_to_gene(bam_file, merged_genes_exons)
+    read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
-    print(f"Time taken to assign reads to genes: {time.time() - start:.2f} seconds")
 
     gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
                  for gene_id in gene_regions.keys()
@@ -462,12 +549,10 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
                               min_support):
     rna_vcfs = load_longcallR_phased_vcf(vcf_file1)
     wg_vcfs = load_whole_genome_phased_vcf(vcf_file2)
-    start = time.time()
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
-    read_assignment = assign_reads_to_gene(bam_file, merged_genes_exons)
+    read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
-    print(f"Time taken to assign reads to genes: {time.time() - start:.2f} seconds")
 
     gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
                  for gene_id in gene_regions.keys()
