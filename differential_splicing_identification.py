@@ -334,10 +334,11 @@ def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
     absent_reads = []
     present_reads = []
     for read_name, (read_start, read_end) in reads_positions.items():
-        if read_start > start_pos or read_end < end_pos:
-            continue
-        # if read_start > end_pos or read_end < start_pos:
+        # if read_start > start_pos or read_end < end_pos:
         #     continue
+        ## Based on Max Marin case, we need to use the following condition
+        if read_start > end_pos or read_end < start_pos:
+            continue
         present = False
         for junction_start, junction_end in reads_junctions[read_name]:
             if junction_start == start_pos and junction_end == end_pos:
