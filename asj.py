@@ -253,7 +253,7 @@ def cluster_junctions_connected_components(reads_junctions, min_count=10):
 def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, min_count=10):
     junctions_clusters = []
     junctions = {}  # key: (start, end), value: count
-    junctions_extended = {}  # key: (start, end), value: (extended_start, extended_end)
+    # junctions_extended = {}  # key: (start, end), value: (extended_start, extended_end)
 
     # Count occurrences of each junction region
     for read_name, junction_regions in reads_junctions.items():
@@ -271,35 +271,44 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
         # single exon
         if len(exon_regions) == 1:
             pass
-        # # two exons
-        # if len(exon_regions) == 2:
-        #     pass
-        # # more than two exons
-        # if len(exon_regions) > 2:
-        #     for i, exon_region in enumerate(exon_regions):
-        #         if i == 0 or i == len(exon_regions) - 1:
-        #             continue
-        #         exons[exon_region] = exons.get(exon_region, 0) + 1
-        for i, exon_region in enumerate(exon_regions):
-            exons[exon_region] = exons.get(exon_region, 0) + 1
+        # two exons
+        if len(exon_regions) == 2:
+            pass
+        # more than two exons
+        if len(exon_regions) > 2:
+            for i, exon_region in enumerate(exon_regions):
+                if i == 0 or i == len(exon_regions) - 1:
+                    continue
+                exons[exon_region] = exons.get(exon_region, 0) + 1
 
-    for (junc_start, junc_end) in junctions.keys():
-        previous_exons = []
-        next_exons = []
-        for (exon_start, exon_end) in exons.keys():
-            if exon_end + 1 == junc_start:
-                previous_exons.append((exon_start, exon_end))
-            if exon_start - 1 == junc_end:
-                next_exons.append((exon_start, exon_end))
-        if previous_exons:
-            junc_extended_start = sorted(previous_exons, key=lambda x: x[0], reverse=False)[0][0]
-        else:
-            junc_extended_start = junc_start
-        if next_exons:
-            junc_extended_end = sorted(next_exons, key=lambda x: x[1], reverse=True)[0][1]
-        else:
-            junc_extended_end = junc_end
-        junctions_extended[(junc_start, junc_end)] = (junc_extended_start, junc_extended_end)
+    # all_exons = {}  # key: (start, end), value: count
+    # for read_name, exon_regions in reads_exons.items():
+    #     if len(exon_regions) == 0:
+    #         pass
+    #     # single exon
+    #     if len(exon_regions) == 1:
+    #         pass
+    #     for i, exon_region in enumerate(exon_regions):
+    #         all_exons[exon_region] = all_exons.get(exon_region, 0) + 1
+    #
+    # for (junc_start, junc_end) in junctions.keys():
+    #     previous_exons = []
+    #     next_exons = []
+    #     for (exon_start, exon_end) in all_exons.keys():
+    #         if exon_end + 1 == junc_start:
+    #             previous_exons.append((exon_start, exon_end))
+    #         if exon_start - 1 == junc_end:
+    #             next_exons.append((exon_start, exon_end))
+    #     # print(f"{junc_start}-{junc_end}, previous_exons: {len(previous_exons)}, next_exons: {len(next_exons)}")
+    #     if previous_exons:
+    #         junc_extended_start = sorted(previous_exons, key=lambda x: x[0], reverse=False)[0][0]
+    #     else:
+    #         junc_extended_start = junc_start
+    #     if next_exons:
+    #         junc_extended_end = sorted(next_exons, key=lambda x: x[1], reverse=True)[0][1]
+    #     else:
+    #         junc_extended_end = junc_end
+    #     junctions_extended[(junc_start, junc_end)] = (junc_extended_start, junc_extended_end)
 
     # Remove exons with count less than min_count
     exons = {k: v for k, v in exons.items() if v >= min_count}
@@ -347,7 +356,7 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
         if len(clu) > 0:
             junctions_clusters.append(clu)
 
-    return junctions_clusters, junctions, junctions_extended
+    return junctions_clusters, junctions
 
 
 def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
@@ -481,8 +490,8 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
     # Extract relevant reads and regions
     reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file, chr, start, end)
     # junctions_clusters, read_junctions = cluster_junctions_connected_components(reads_introns, min_count)
-    junctions_clusters, read_junctions, junctions_extended = cluster_junctions_exons_connected_components(
-        reads_introns, reads_exons, min_count)
+    junctions_clusters, read_junctions = cluster_junctions_exons_connected_components(reads_introns, reads_exons,
+                                                                                      min_count)
 
     # filter reads which have no overlapped exons with current gene exons
     intervalt = IntervalTree()
@@ -520,10 +529,10 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             junction_start = read_junc[0]
             junction_end = read_junc[1]
             novel = (chr, junction_start, junction_end) not in gene_junction_set
-            (extended_junction_start, extended_junction_end) = junctions_extended[(junction_start, junction_end)]
-            absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
-                                                      reads_introns)
-            # absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
+            # (extended_junction_start, extended_junction_end) = junctions_extended[(junction_start, junction_end)]
+            # absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
+            #                                           reads_introns)
+            absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
             test_results = haplotype_event_test(absences, presents, reads_tags)
             for event in test_results:
                 (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = event
