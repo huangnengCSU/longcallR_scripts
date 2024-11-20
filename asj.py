@@ -98,6 +98,47 @@ def get_gene_regions(annotation_file, gene_types):
     return gene_regions, gene_names, gene_strands, exon_regions, intron_regions
 
 
+def get_exon_intron_regions(read):
+    exon_regions = []  # 1-based, start-inclusive, end-inclusive
+    intron_regions = []  # 1-based, start-inclusive, end-inclusive
+    reference_start = read.reference_start + 1  # 1-based
+    current_position = reference_start
+    for cigartuple in read.cigartuples:
+        operation, length = cigartuple
+        if operation in {0, 7, 8}:
+            if exon_regions and exon_regions[-1][1] + 1 == current_position:
+                # Extend the last exon region if it is contiguous
+                exon_regions[-1] = (exon_regions[-1][0], exon_regions[-1][1] + length)
+            else:
+                # Start a new exon region
+                exon_start = current_position
+                exon_end = current_position + length - 1
+                exon_regions.append((exon_start, exon_end))
+            current_position += length
+        elif operation == 2:  # 'D' operation represents deletions (still part of exon on the reference)
+            if exon_regions and exon_regions[-1][1] + 1 == current_position:
+                # Extend the last exon region if it is contiguous
+                exon_regions[-1] = (exon_regions[-1][0], exon_regions[-1][1] + length)
+            else:
+                # Start a new exon region, case: 100M20N10D100M
+                exon_start = current_position
+                exon_end = current_position + length - 1
+                exon_regions.append((exon_start, exon_end))
+            current_position += length
+        elif operation == 3:  # 'N' operation represents skipped region (intron)
+            intron_start = current_position
+            intron_end = current_position + length - 1
+            intron_regions.append((intron_start, intron_end))
+            current_position += length
+        else:
+            pass
+        # elif operation in {1, 4, 5}:  # 'I', 'S', 'H' operations
+        #     pass
+        # else:
+        #     current_position += length
+    return exon_regions, intron_regions
+
+
 def parse_reads_from_alignment(bam_file, chr, start_pos, end_pos):
     """Parse reads from a BAM file that overlap a specific region.
     :param bam_file: Path to the BAM file
@@ -106,40 +147,6 @@ def parse_reads_from_alignment(bam_file, chr, start_pos, end_pos):
     :param end_pos: End position, 1-based inclusive
     :return:
     """
-
-    def get_exon_intron_regions(read):
-        exon_regions = []  # 1-based, start-inclusive, end-inclusive
-        intron_regions = []  # 1-based, start-inclusive, end-inclusive
-        reference_start = read.reference_start + 1  # 1-based
-        current_position = reference_start
-        for cigartuple in read.cigartuples:
-            operation, length = cigartuple
-            if operation in {0, 7, 8}:
-                if exon_regions and exon_regions[-1][1] + 1 == current_position:
-                    # Extend the last exon region if it is contiguous
-                    exon_regions[-1] = (exon_regions[-1][0], exon_regions[-1][1] + length)
-                else:
-                    # Start a new exon region
-                    exon_start = current_position
-                    exon_end = current_position + length - 1
-                    exon_regions.append((exon_start, exon_end))
-                current_position += length
-            elif operation == 2:  # 'D' operation represents deletions (still part of exon on the reference)
-                if exon_regions and exon_regions[-1][1] + 1 == current_position:
-                    # Extend the last exon region if it is contiguous
-                    exon_regions[-1] = (exon_regions[-1][0], exon_regions[-1][1] + length)
-                current_position += length
-            elif operation == 3:  # 'N' operation represents skipped region (intron)
-                intron_start = current_position
-                intron_end = current_position + length - 1
-                intron_regions.append((intron_start, intron_end))
-                current_position += length
-            elif operation in {1, 4, 5}:  # 'I', 'S', 'H' operations
-                pass
-            else:
-                current_position += length
-        return exon_regions, intron_regions
-
     reads_exons = {}
     reads_junctions = {}
     reads_positions = {}  # 1-based, start-inclusive, end-inclusive
@@ -246,6 +253,7 @@ def cluster_junctions_connected_components(reads_junctions, min_count=10):
 def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, min_count=10):
     junctions_clusters = []
     junctions = {}  # key: (start, end), value: count
+    junctions_extended = {}  # key: (start, end), value: (extended_start, extended_end)
 
     # Count occurrences of each junction region
     for read_name, junction_regions in reads_junctions.items():
@@ -263,15 +271,35 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
         # single exon
         if len(exon_regions) == 1:
             pass
-        # two exons
-        if len(exon_regions) == 2:
-            pass
-        # more than two exons
-        if len(exon_regions) > 2:
-            for i, exon_region in enumerate(exon_regions):
-                if i == 0 or i == len(exon_regions) - 1:
-                    continue
-                exons[exon_region] = exons.get(exon_region, 0) + 1
+        # # two exons
+        # if len(exon_regions) == 2:
+        #     pass
+        # # more than two exons
+        # if len(exon_regions) > 2:
+        #     for i, exon_region in enumerate(exon_regions):
+        #         if i == 0 or i == len(exon_regions) - 1:
+        #             continue
+        #         exons[exon_region] = exons.get(exon_region, 0) + 1
+        for i, exon_region in enumerate(exon_regions):
+            exons[exon_region] = exons.get(exon_region, 0) + 1
+
+    for (junc_start, junc_end) in junctions.keys():
+        previous_exons = []
+        next_exons = []
+        for (exon_start, exon_end) in exons.keys():
+            if exon_end + 1 == junc_start:
+                previous_exons.append((exon_start, exon_end))
+            if exon_start - 1 == junc_end:
+                next_exons.append((exon_start, exon_end))
+        if previous_exons:
+            junc_extended_start = sorted(previous_exons, key=lambda x: x[0], reverse=False)[0][0]
+        else:
+            junc_extended_start = junc_start
+        if next_exons:
+            junc_extended_end = sorted(next_exons, key=lambda x: x[1], reverse=True)[0][1]
+        else:
+            junc_extended_end = junc_end
+        junctions_extended[(junc_start, junc_end)] = (junc_extended_start, junc_extended_end)
 
     # Remove exons with count less than min_count
     exons = {k: v for k, v in exons.items() if v >= min_count}
@@ -319,7 +347,7 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
         if len(clu) > 0:
             junctions_clusters.append(clu)
 
-    return junctions_clusters, junctions
+    return junctions_clusters, junctions, junctions_extended
 
 
 def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
@@ -453,8 +481,8 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
     # Extract relevant reads and regions
     reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file, chr, start, end)
     # junctions_clusters, read_junctions = cluster_junctions_connected_components(reads_introns, min_count)
-    junctions_clusters, read_junctions = cluster_junctions_exons_connected_components(reads_introns, reads_exons,
-                                                                                      min_count)
+    junctions_clusters, read_junctions, junctions_extended = cluster_junctions_exons_connected_components(
+        reads_introns, reads_exons, min_count)
 
     # filter reads which have no overlapped exons with current gene exons
     intervalt = IntervalTree()
@@ -492,9 +520,10 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             junction_start = read_junc[0]
             junction_end = read_junc[1]
             novel = (chr, junction_start, junction_end) not in gene_junction_set
-            # TODO: find a exon with (end position + 1) equal to junction_start, and find a exon with (start position - 1) equal to junction_end
-            # TODO: use the previous exon's start position as junction_start and use the next exon's end position as junction_end
-            absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
+            (extended_junction_start, extended_junction_end) = junctions_extended[(junction_start, junction_end)]
+            absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
+                                                      reads_introns)
+            # absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
             test_results = haplotype_event_test(absences, presents, reads_tags)
             for event in test_results:
                 (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = event
