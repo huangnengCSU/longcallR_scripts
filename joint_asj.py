@@ -662,7 +662,8 @@ if __name__ == "__main__":
     parse = argparse.ArgumentParser()
     parse.add_argument("-a", "--annotation_file", help="Annotation file in GFF3 or GTF format", required=True)
     parse.add_argument("-b", "--bam_file", help="BAM file", required=True)
-    parse.add_argument("-r", "--tissue_readnames", required=True, help="Tissue read names")
+    parse.add_argument("-r", "--tissue_readnames", required=True,
+                       help="File stores tissue name of each read in tsv format, read_name\ttissue_name")
     parse.add_argument("-o", "--output_prefix", help="prefix of output file", required=True)
     parse.add_argument("-t", "--threads", help="Number of threads", default=1, type=int)
     parse.add_argument("-g", "--gene_types", type=str, nargs="+", default=["protein_coding", "lncRNA"],

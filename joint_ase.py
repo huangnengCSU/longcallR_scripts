@@ -490,7 +490,8 @@ def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, thr
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-b", "--bam", required=True, help="phased BAM file")
-    parser.add_argument("-r", "--tissue_readnames", required=True, help="Tissue read names")
+    parser.add_argument("-r", "--tissue_readnames", required=True,
+                        help="File stores tissue name of each read in tsv format, read_name\ttissue_name")
     parser.add_argument("-a", "--annotation", required=True, help="Annotation file")
     parser.add_argument("-o", "--output", required=True, help="prefix of output file")
     parser.add_argument("-p", "--processes", type=int, default=1, help="Number of process to run")
