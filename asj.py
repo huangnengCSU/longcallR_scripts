@@ -631,7 +631,7 @@ if __name__ == "__main__":
                        help='Gene types to be analyzed. Default is ["protein_coding", "lncRNA"]', )
     parse.add_argument("-m", "--min_sup", help="Minimum support of phased reads for exon or junction", default=10,
                        type=int)
-    parse.add_argument("-p", "--p_value_threshold", help="P-value threshold for Fisher's exact test", default=1e-15,
+    parse.add_argument("-p", "--p_value_threshold", help="P-value threshold for Fisher's exact test", default=0.05,
                        type=float)
     parse.add_argument("-s", "--sor_threshold", help="SOR threshold for filtering, higher value is more stringent",
                        default=2.0, type=float)
