@@ -270,11 +270,13 @@ def assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads):
 
     chunks = []
     for chromosome in chromosomes:
-        total_length = chromosome_lengths[chromosome]
+        total_length = chromosome_lengths[chromosome]  # 1-based
         chunk_size = max(1, math.ceil(total_length / threads))
         for i in range(threads):
             start = i * chunk_size  # 0-based, inclusive
             end = min((i + 1) * chunk_size, total_length)  # 0-based, exclusive
+            if start >= end:
+                continue
             tree = trees_by_chr[chromosome]
             gene_intervals = gene_intervals_by_chr[chromosome]
             chunks.append((bam_file, chromosome, start, end, tree, gene_intervals))
