@@ -97,12 +97,23 @@ def get_gene_regions(annotation_file, gene_types):
     return gene_regions, gene_names, gene_strands, exon_regions, intron_regions
 
 
+def count_mapped_reads(bam_file):
+    bam = pysam.AlignmentFile(bam_file, "rb")
+    mapped_reads = 0
+    for read in bam.fetch(until_eof=True):
+        if not read.is_unmapped:  # Check if the read is mapped
+            mapped_reads += 1
+    bam.close()
+    return mapped_reads
+
+
 def merge_gene_exon_regions(exon_regions):
     """Merge transcript exons into gene regions."""
     # merged_genes_exons_sorted_by_start = dict()  # key: chr, value: list of sorted (collapsed_exons, gene_id, gene_name)
 
     # merged_genes_exons, key: chr, value: dict of gene_id: [(start, end), ..., (start, end)]
     merged_genes_exons = defaultdict(lambda: defaultdict(list))
+    gene_length = {}
 
     for gene_id, transcripts in exon_regions.items():
         collapsed_exons = IntervalTree()
@@ -132,7 +143,12 @@ def merge_gene_exon_regions(exon_regions):
         #     merged_genes_exons_sorted_by_start[chromosome].insert(insert_position,
         #                                                           (collapsed_exons, gene_id, gene_names[gene_id]))
     # return merged_genes_exons_sorted_by_start
-    return merged_genes_exons
+
+    for chrom in merged_genes_exons.keys():
+        for gene_id, exons in merged_genes_exons[chrom].items():
+            gene_length[gene_id] = sum(end - start + 1 for start, end in exons)
+
+    return merged_genes_exons, gene_length
 
 
 def assign_reads_to_gene(bam_file, merged_genes_exons):
@@ -359,7 +375,8 @@ def get_reads_tag(bam_file, chr, start_pos, end_pos):
     return reads_tag
 
 
-def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, gene_assigned_reads):
+def calculate_ase_pvalue(bam_file, total_mapped_read_count, gene_id, gene_name, gene_region, gene_length, min_count,
+                         gene_assigned_reads):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     # assigned_reads = set()
     #
@@ -377,49 +394,64 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
             if ps and hp:
                 phase_set_hap_count[ps][hp] += 1
 
-    # Step 1: Collect p-values for each phase set
-    p_values = []
-    phase_sets = []
-    hap_counts = []
+    # get the ps with the most reads
+    ps_read_cnt = {ps: sum(hap_count.values()) for ps, hap_count in phase_set_hap_count.items()}
+    if ps_read_cnt:
+        most_reads_ps = sorted(ps_read_cnt, key=ps_read_cnt.get, reverse=True)[0]
+    else:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
 
-    for ps, hap_count in phase_set_hap_count.items():
-        if hap_count[1] + hap_count[2] < min_count:
-            continue
-        # Binomial test p-value
-        total_reads = hap_count[1] + hap_count[2]
-        p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
-        p_values.append(p_value_ase)
-        phase_sets.append(ps)
-        hap_counts.append((hap_count[1], hap_count[2]))
+    hap_count = phase_set_hap_count[most_reads_ps]
+    if hap_count[1] + hap_count[2] < min_count:
+        return (gene_name, gene_region["chr"], 1.0, most_reads_ps, 0, 0, 0, 0)
+    h1_norm = (hap_count[1] * 1e9) / (total_mapped_read_count * gene_length)
+    h2_norm = (hap_count[2] * 1e9) / (total_mapped_read_count * gene_length)
+    p_value_ase = binomtest(hap_count[1], hap_count[1] + hap_count[2], 0.5, alternative='two-sided').pvalue
+    return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, hap_count[1], hap_count[2], h1_norm, h2_norm)
 
-    # Step 2: Apply Benjamini–Hochberg correction
-    if p_values:
-        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-
-        # Step 3: Find the most significant adjusted p-value
-        min_p_value_index = adjusted_p_values.argmin()
-        most_significant_phase_set = phase_sets[min_p_value_index]
-        h1_count, h2_count = hap_counts[min_p_value_index]
-        adjusted_p_value = adjusted_p_values[min_p_value_index]
-
-        return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set, h1_count, h2_count)
-
-    # # fisher's method
+    # # Step 1: Collect p-values for each phase set
+    # p_values = []
+    # phase_sets = []
+    # hap_counts = []
+    #
+    # for ps, hap_count in phase_set_hap_count.items():
+    #     if hap_count[1] + hap_count[2] < min_count:
+    #         continue
+    #     # Binomial test p-value
+    #     total_reads = hap_count[1] + hap_count[2]
+    #     p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
+    #     p_values.append(p_value_ase)
+    #     phase_sets.append(ps)
+    #     hap_counts.append((hap_count[1], hap_count[2]))
+    #
+    # # Step 2: Apply Benjamini–Hochberg correction
     # if p_values:
-    #     min_p_value_index = np.argmin(p_values)
+    #     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    #
+    #     # Step 3: Find the most significant adjusted p-value
+    #     min_p_value_index = adjusted_p_values.argmin()
     #     most_significant_phase_set = phase_sets[min_p_value_index]
     #     h1_count, h2_count = hap_counts[min_p_value_index]
-    #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-    #     dof = 2 * len(p_values)
-    #     combined_p_value = chi2.sf(X2, dof)
-    #     return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set, h1_count, h2_count)
+    #     adjusted_p_value = adjusted_p_values[min_p_value_index]
+    #
+    #     return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set, h1_count, h2_count)
+    #
+    # # # fisher's method
+    # # if p_values:
+    # #     min_p_value_index = np.argmin(p_values)
+    # #     most_significant_phase_set = phase_sets[min_p_value_index]
+    # #     h1_count, h2_count = hap_counts[min_p_value_index]
+    # #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+    # #     dof = 2 * len(p_values)
+    # #     combined_p_value = chi2.sf(X2, dof)
+    # #     return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set, h1_count, h2_count)
+    #
+    # # If no valid p-values are found, return defaults
+    # return (gene_name, gene_region["chr"], 1.0, ".", 0, 0)
 
-    # If no valid p-values are found, return defaults
-    return (gene_name, gene_region["chr"], 1.0, ".", 0, 0)
 
-
-def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_count, gene_assigned_reads,
-                                 rna_vcfs, wg_vcfs):
+def calculate_ase_pvalue_pat_mat(bam_file, total_mapped_read_count, gene_id, gene_name, gene_region, gene_length,
+                                 min_count, gene_assigned_reads, rna_vcfs, wg_vcfs):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     # assigned_reads = set()
     #
@@ -437,95 +469,158 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
             if ps and hp:
                 phase_set_hap_count[ps][hp] += 1
 
-    # Step 1: Collect p-values for each phase set
-    p_values = []
-    phase_sets = []
-    hap_counts = []
+    # get the ps with the most reads
+    ps_read_cnt = {ps: sum(hap_count.values()) for ps, hap_count in phase_set_hap_count.items()}
+    if ps_read_cnt:
+        most_reads_ps = sorted(ps_read_cnt, key=ps_read_cnt.get, reverse=True)[0]
+    else:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0, 0, 0, 0, 0)
+    hap_count = phase_set_hap_count[most_reads_ps]
+    if hap_count[1] + hap_count[2] < min_count:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0, 0, 0, 0, 0)
+    h1_count, h2_count = hap_count[1], hap_count[2]
+    h1_norm = (hap_count[1] * 1e9) / (total_mapped_read_count * gene_length)
+    h2_norm = (hap_count[2] * 1e9) / (total_mapped_read_count * gene_length)
+    p_value_ase = binomtest(hap_count[1], hap_count[1] + hap_count[2], 0.5, alternative='two-sided').pvalue
 
-    for ps, hap_count in phase_set_hap_count.items():
-        if hap_count[1] + hap_count[2] < min_count:
+    # determine paternal and maternal alleles for H1 and H2
+    ps_variants = rna_vcfs.get(most_reads_ps, [])
+    ps_reads = [rname for rname in assigned_reads if
+                rname in reads_tag and reads_tag[rname]["PS"] == most_reads_ps]
+    h1_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 1]
+    h2_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 2]
+
+    ps_variant_pos = [int(pos.split(":")[1]) - 1 for pos in ps_variants]  # 0-based
+    reads_pat_mat_cnt = defaultdict(
+        lambda: {"pat": 0, "mat": 0})  # key: read name, value: {paternal: count, maternal: count}
+    for pileupcolumn in pysam.AlignmentFile(bam_file, "rb").pileup(gene_region["chr"], gene_region["start"] - 1,
+                                                                   gene_region["end"], max_depth=100000):
+        if pileupcolumn.pos not in ps_variant_pos or f"{gene_region['chr']}:{pileupcolumn.pos + 1}" not in wg_vcfs:
             continue
-        # Binomial test p-value
-        total_reads = hap_count[1] + hap_count[2]
-        p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
-        p_values.append(p_value_ase)
-        phase_sets.append(ps)
-        hap_counts.append((hap_count[1], hap_count[2]))
-
-    if p_values:
-        # # Step 2: fisher's method
-        # min_p_value_index = np.argmin(p_values)
-        # most_significant_phase_set = phase_sets[min_p_value_index]
-        # h1_count, h2_count = hap_counts[min_p_value_index]
-        # X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-        # dof = 2 * len(p_values)
-        # combined_p_value = chi2.sf(X2, dof)
-
-        # apply Benjamini–Hochberg correction
-        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-        min_p_value_index = adjusted_p_values.argmin()
-        most_significant_phase_set = phase_sets[min_p_value_index]
-        h1_count, h2_count = hap_counts[min_p_value_index]
-        adjusted_p_value = adjusted_p_values[min_p_value_index]
-
-        # determine paternal and maternal alleles for H1 and H2
-        ps_variants = rna_vcfs.get(most_significant_phase_set, [])
-        ps_reads = [rname for rname in assigned_reads if
-                    rname in reads_tag and reads_tag[rname]["PS"] == most_significant_phase_set]
-        h1_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 1]
-        h2_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 2]
-
-        ps_variant_pos = [int(pos.split(":")[1]) - 1 for pos in ps_variants]  # 0-based
-        reads_pat_mat_cnt = defaultdict(
-            lambda: {"pat": 0, "mat": 0})  # key: read name, value: {paternal: count, maternal: count}
-        for pileupcolumn in pysam.AlignmentFile(bam_file, "rb").pileup(gene_region["chr"], gene_region["start"] - 1,
-                                                                       gene_region["end"], max_depth=100000):
-            if pileupcolumn.pos not in ps_variant_pos or f"{gene_region['chr']}:{pileupcolumn.pos + 1}" not in wg_vcfs:
+        for pileup_read in pileupcolumn.pileups:
+            if not pileup_read.is_del and not pileup_read.is_refskip:
+                read_name = pileup_read.alignment.query_name
+                if read_name in ps_reads:
+                    base = pileup_read.alignment.query_sequence[pileup_read.query_position]
+                    # wg_vcfs is 1-based, pileupcolumn.pos is 0-based
+                    if base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["pat"]:
+                        reads_pat_mat_cnt[read_name]["pat"] += 1
+                    elif base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["mat"]:
+                        reads_pat_mat_cnt[read_name]["mat"] += 1
+                    else:
+                        continue
+    h1_pat_cnt, h1_mat_cnt = 0, 0
+    for reads in h1_reads:
+        if reads in reads_pat_mat_cnt:
+            if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
+                h1_pat_cnt += 1
+            elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
+                h1_mat_cnt += 1
+            else:
                 continue
-            for pileup_read in pileupcolumn.pileups:
-                if not pileup_read.is_del and not pileup_read.is_refskip:
-                    read_name = pileup_read.alignment.query_name
-                    if read_name in ps_reads:
-                        base = pileup_read.alignment.query_sequence[pileup_read.query_position]
-                        # wg_vcfs is 1-based, pileupcolumn.pos is 0-based
-                        if base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["pat"]:
-                            reads_pat_mat_cnt[read_name]["pat"] += 1
-                        elif base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["mat"]:
-                            reads_pat_mat_cnt[read_name]["mat"] += 1
-                        else:
-                            continue
-        h1_pat_cnt, h1_mat_cnt = 0, 0
-        for reads in h1_reads:
-            if reads in reads_pat_mat_cnt:
-                if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
-                    h1_pat_cnt += 1
-                elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
-                    h1_mat_cnt += 1
-                else:
-                    continue
-        h2_pat_cnt, h2_mat_cnt = 0, 0
-        for reads in h2_reads:
-            if reads in reads_pat_mat_cnt:
-                if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
-                    h2_pat_cnt += 1
-                elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
-                    h2_mat_cnt += 1
-                else:
-                    continue
-        return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set,
-                h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
+    h2_pat_cnt, h2_mat_cnt = 0, 0
+    for reads in h2_reads:
+        if reads in reads_pat_mat_cnt:
+            if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
+                h2_pat_cnt += 1
+            elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
+                h2_mat_cnt += 1
+            else:
+                continue
+    return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, h1_norm, h2_norm,
+            h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
 
-    # If no valid p-values are found, return defaults
-    return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0, 0, 0)
+    # # Step 1: Collect p-values for each phase set
+    # p_values = []
+    # phase_sets = []
+    # hap_counts = []
+    #
+    # for ps, hap_count in phase_set_hap_count.items():
+    #     if hap_count[1] + hap_count[2] < min_count:
+    #         continue
+    #     # Binomial test p-value
+    #     total_reads = hap_count[1] + hap_count[2]
+    #     p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
+    #     p_values.append(p_value_ase)
+    #     phase_sets.append(ps)
+    #     hap_counts.append((hap_count[1], hap_count[2]))
+    #
+    # if p_values:
+    #     # # Step 2: fisher's method
+    #     # min_p_value_index = np.argmin(p_values)
+    #     # most_significant_phase_set = phase_sets[min_p_value_index]
+    #     # h1_count, h2_count = hap_counts[min_p_value_index]
+    #     # X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
+    #     # dof = 2 * len(p_values)
+    #     # combined_p_value = chi2.sf(X2, dof)
+    #
+    #     # apply Benjamini–Hochberg correction
+    #     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    #     min_p_value_index = adjusted_p_values.argmin()
+    #     most_significant_phase_set = phase_sets[min_p_value_index]
+    #     h1_count, h2_count = hap_counts[min_p_value_index]
+    #     adjusted_p_value = adjusted_p_values[min_p_value_index]
+    #
+    #     # determine paternal and maternal alleles for H1 and H2
+    #     ps_variants = rna_vcfs.get(most_significant_phase_set, [])
+    #     ps_reads = [rname for rname in assigned_reads if
+    #                 rname in reads_tag and reads_tag[rname]["PS"] == most_significant_phase_set]
+    #     h1_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 1]
+    #     h2_reads = [rname for rname in ps_reads if reads_tag[rname]["HP"] == 2]
+    #
+    #     ps_variant_pos = [int(pos.split(":")[1]) - 1 for pos in ps_variants]  # 0-based
+    #     reads_pat_mat_cnt = defaultdict(
+    #         lambda: {"pat": 0, "mat": 0})  # key: read name, value: {paternal: count, maternal: count}
+    #     for pileupcolumn in pysam.AlignmentFile(bam_file, "rb").pileup(gene_region["chr"], gene_region["start"] - 1,
+    #                                                                    gene_region["end"], max_depth=100000):
+    #         if pileupcolumn.pos not in ps_variant_pos or f"{gene_region['chr']}:{pileupcolumn.pos + 1}" not in wg_vcfs:
+    #             continue
+    #         for pileup_read in pileupcolumn.pileups:
+    #             if not pileup_read.is_del and not pileup_read.is_refskip:
+    #                 read_name = pileup_read.alignment.query_name
+    #                 if read_name in ps_reads:
+    #                     base = pileup_read.alignment.query_sequence[pileup_read.query_position]
+    #                     # wg_vcfs is 1-based, pileupcolumn.pos is 0-based
+    #                     if base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["pat"]:
+    #                         reads_pat_mat_cnt[read_name]["pat"] += 1
+    #                     elif base in wg_vcfs[f"{gene_region['chr']}:{pileupcolumn.pos + 1}"]["mat"]:
+    #                         reads_pat_mat_cnt[read_name]["mat"] += 1
+    #                     else:
+    #                         continue
+    #     h1_pat_cnt, h1_mat_cnt = 0, 0
+    #     for reads in h1_reads:
+    #         if reads in reads_pat_mat_cnt:
+    #             if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
+    #                 h1_pat_cnt += 1
+    #             elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
+    #                 h1_mat_cnt += 1
+    #             else:
+    #                 continue
+    #     h2_pat_cnt, h2_mat_cnt = 0, 0
+    #     for reads in h2_reads:
+    #         if reads in reads_pat_mat_cnt:
+    #             if reads_pat_mat_cnt[reads]["pat"] > reads_pat_mat_cnt[reads]["mat"]:
+    #                 h2_pat_cnt += 1
+    #             elif reads_pat_mat_cnt[reads]["pat"] < reads_pat_mat_cnt[reads]["mat"]:
+    #                 h2_mat_cnt += 1
+    #             else:
+    #                 continue
+    #     return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set,
+    #             h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
+    #
+    # # If no valid p-values are found, return defaults
+    # return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0, 0, 0)
 
 
 def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, min_support):
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
-    merged_genes_exons = merge_gene_exon_regions(exon_regions)
+    total_mapped_read_count = count_mapped_reads(bam_file)
+    merged_genes_exons, gene_lengths = merge_gene_exon_regions(exon_regions)
     read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
 
-    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
+    gene_args = [(bam_file, total_mapped_read_count, gene_id, gene_names[gene_id], gene_regions[gene_id],
+                  gene_lengths[gene_id], min_support)
                  for gene_id in gene_regions.keys()
                  if gene_id in gene_assigned_reads]
     results = []
@@ -537,14 +632,22 @@ def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, 
             futures = [executor.submit(calculate_ase_pvalue, *gene_data, shared_assignments) for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    # # apply Benjamini–Hochberg correction
-    # p_values = [result[2] for result in results]
-    # reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
+    # apply Benjamini–Hochberg correction for all genes with at least min_support reads
+    pass_idx = []
+    p_values = []
+    for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_norm, h2_norm) in enumerate(results):
+        if h1 + h2 >= min_support:
+            pass_idx.append(idx)
+            p_values.append(p_value)
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
-        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\n")
-        for idx, (gene_name, chrom, p_value, ps, h1, h2) in enumerate(results):
-            # p_value = adjusted_p_values[idx]
-            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\n")
+        f.write("Gene\tChr\tPS\tH1\tH2\tH1_norm\tH2_norm\tP-value\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            gene_name, chrom, p_value, ps, h1, h2, h1_norm, h2_norm = results[idx]
+            p_value = adjusted_p_values[pi]
+            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{h1_norm}\t{h2_norm}\t{p_value}\n")
 
 
 def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, out_file, threads, gene_types,
@@ -552,11 +655,13 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
     rna_vcfs = load_longcallR_phased_vcf(vcf_file1)
     wg_vcfs = load_whole_genome_phased_vcf(vcf_file2)
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
-    merged_genes_exons = merge_gene_exon_regions(exon_regions)
+    total_mapped_read_count = count_mapped_reads(bam_file)
+    merged_genes_exons, gene_lengths = merge_gene_exon_regions(exon_regions)
     read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
 
-    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
+    gene_args = [(bam_file, total_mapped_read_count, gene_id, gene_names[gene_id], gene_regions[gene_id],
+                  gene_lengths[gene_id], min_support)
                  for gene_id in gene_regions.keys()
                  if gene_id in gene_assigned_reads]
     results = []
@@ -571,14 +676,24 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
                                        shared_wg_vcfs) for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    # # apply Benjamini–Hochberg correction
-    # p_values = [result[2] for result in results]
-    # reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    # apply Benjamini–Hochberg correction
+    pass_idx = []
+    p_values = []
+    for idx, (gene_name, chrom, p_value, ps, h1_norm, h2_norm, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat) in enumerate(
+            results):
+        if h1 + h2 >= min_support:
+            pass_idx.append(idx)
+            p_values.append(p_value)
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
-        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
-        for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat) in enumerate(results):
-            # p_value = adjusted_p_values[idx]
-            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
+        f.write(
+            "Gene\tChr\tPS\tH1\tH2\t{H1_norm}\t{H2_norm}\tP-value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            gene_name, chrom, p_value, ps, h1_norm, h2_norm, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat = results[idx]
+            p_value = adjusted_p_values[pi]
+            f.write(
+                f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{h1_norm}\t{h2_norm}\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
 
 
 if __name__ == "__main__":
