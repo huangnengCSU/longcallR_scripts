@@ -433,7 +433,6 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags):
     :param reads_tags:
     :return:
     """
-    events = []
     hap_absent_counts = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {hap1: count, hap2: count}
     hap_present_counts = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {hap1: count, hap2: count}
     for read_name in absent_reads:
@@ -445,36 +444,66 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags):
         phase_set = reads_tags[read_name]["PS"]
         hap_present_counts[phase_set][hap] += 1
     all_phase_sets = set(hap_absent_counts.keys()).union(set(hap_present_counts.keys()))
-    for phase_set in all_phase_sets:
-        if phase_set == ".":
-            continue
-        # take phased reads without phase set into account
-        hap_absent_counts[phase_set][1] = hap_absent_counts[phase_set].get(1, 0) + hap_absent_counts["."].get(1, 0)
-        hap_absent_counts[phase_set][2] = hap_absent_counts[phase_set].get(2, 0) + hap_absent_counts["."].get(2, 0)
-        hap_present_counts[phase_set][1] = hap_present_counts[phase_set].get(1, 0) + hap_present_counts["."].get(1, 0)
-        hap_present_counts[phase_set][2] = hap_present_counts[phase_set].get(2, 0) + hap_present_counts["."].get(2, 0)
-        table = np.array([[hap_absent_counts[phase_set][1], hap_absent_counts[phase_set][2]],
-                          [hap_present_counts[phase_set][1], hap_present_counts[phase_set][2]]])
-        ## Fisher's exact test
-        oddsratio, pvalue_fisher = fisher_exact(table)
-        ## G-test
-        g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-30, lambda_="log-likelihood")
-        pvalue_gtest = np.min(pvalue_gtest)
 
-        ## Use the maximum p-value from Fisher's exact test and G-test
-        pvalue = max(pvalue_fisher, pvalue_gtest)
+    # get the ps with the most reads
+    ps_read_count = {ps: sum(hap_absent_counts[ps].values()) + sum(hap_present_counts[ps].values()) for ps in
+                     all_phase_sets}
+    if ps_read_count:
+        most_reads_ps = sorted(ps_read_count, key=ps_read_count.get, reverse=True)[0]
+    else:
+        return None
 
-        ## Calculate SOR, refer to GATK AS_StrandOddsRatio, https://gatk.broadinstitute.org/hc/en-us/articles/360037224532-AS-StrandOddsRatio
-        sor = calc_sor(hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
-                       hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2])
-        event = (phase_set, hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
-                 hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2], pvalue, sor)
-        events.append(event)
-    return events
+    phase_set = most_reads_ps
+    # take phased reads without phase set into account
+    hap_absent_counts[phase_set][1] = hap_absent_counts[phase_set].get(1, 0)
+    hap_absent_counts[phase_set][2] = hap_absent_counts[phase_set].get(2, 0)
+    hap_present_counts[phase_set][1] = hap_present_counts[phase_set].get(1, 0)
+    hap_present_counts[phase_set][2] = hap_present_counts[phase_set].get(2, 0)
+    table = np.array([[hap_absent_counts[phase_set][1], hap_absent_counts[phase_set][2]],
+                      [hap_present_counts[phase_set][1], hap_present_counts[phase_set][2]]])
+    ## Fisher's exact test
+    oddsratio, pvalue_fisher = fisher_exact(table)
+    ## G-test
+    g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-300, lambda_="log-likelihood")
+    pvalue_gtest = np.min(pvalue_gtest)
+    ## Use the maximum p-value from Fisher's exact test and G-test
+    pvalue = max(pvalue_fisher, pvalue_gtest)
+    ## Calculate SOR, refer to GATK AS_StrandOddsRatio, https://gatk.broadinstitute.org/hc/en-us/articles/360037224532-AS-StrandOddsRatio
+    sor = calc_sor(hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
+                   hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2])
+    event = (phase_set, hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
+             hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2], pvalue, sor)
+    return event
+
+    # for phase_set in all_phase_sets:
+    #     if phase_set == ".":
+    #         continue
+    #     # take phased reads without phase set into account
+    #     hap_absent_counts[phase_set][1] = hap_absent_counts[phase_set].get(1, 0) + hap_absent_counts["."].get(1, 0)
+    #     hap_absent_counts[phase_set][2] = hap_absent_counts[phase_set].get(2, 0) + hap_absent_counts["."].get(2, 0)
+    #     hap_present_counts[phase_set][1] = hap_present_counts[phase_set].get(1, 0) + hap_present_counts["."].get(1, 0)
+    #     hap_present_counts[phase_set][2] = hap_present_counts[phase_set].get(2, 0) + hap_present_counts["."].get(2, 0)
+    #     table = np.array([[hap_absent_counts[phase_set][1], hap_absent_counts[phase_set][2]],
+    #                       [hap_present_counts[phase_set][1], hap_present_counts[phase_set][2]]])
+    #     ## Fisher's exact test
+    #     oddsratio, pvalue_fisher = fisher_exact(table)
+    #     ## G-test
+    #     g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-30, lambda_="log-likelihood")
+    #     pvalue_gtest = np.min(pvalue_gtest)
+    #
+    #     ## Use the maximum p-value from Fisher's exact test and G-test
+    #     pvalue = max(pvalue_fisher, pvalue_gtest)
+    #
+    #     ## Calculate SOR, refer to GATK AS_StrandOddsRatio, https://gatk.broadinstitute.org/hc/en-us/articles/360037224532-AS-StrandOddsRatio
+    #     sor = calc_sor(hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
+    #                    hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2])
+    #     event = (phase_set, hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
+    #              hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2], pvalue, sor)
+    #     events.append(event)
+    # return events
 
 
-def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region, bam_file, min_count,
-                 p_value_threshold, sor_threshold):
+def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region, bam_file, min_count):
     chr = gene_region["chr"]
     start = gene_region["start"]
     end = gene_region["end"]
@@ -516,11 +545,9 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         del reads_introns[qname]
         del reads_tags[qname]
 
-    gene_ase_events = []
+    gene_ase_events = []  # each gene may have multiple allele-specific junctions
 
     # Analyze junction regions
-    asj_p_values = []
-    asj_sors = []
     for junc_cluster in junctions_clusters:
         if len(junc_cluster) == 0:
             continue
@@ -533,48 +560,24 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             # absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
             #                                           reads_introns)
             absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
-            test_results = haplotype_event_test(absences, presents, reads_tags)
-            for event in test_results:
-                (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = event
-                asj_p_values.append(pvalue)
-                asj_sors.append(sor)
-                if pvalue == 0:
-                    gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
-                                                    junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
-                elif pvalue < p_value_threshold and sor >= sor_threshold:
-                    gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
-                                                    junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
-    # ## Fisher's method to combine p-values
-    # if asj_p_values:
-    #     min_p_value_index = np.argmin(asj_p_values)
-    #     most_significant_sor = asj_sors[min_p_value_index]
-    #     X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
-    #     dof = 2 * len(asj_p_values)
-    #     combined_asj_p_value = chi2.sf(X2, dof)
-    #     return (gene_ase_events, gene_name, chr, combined_asj_p_value, most_significant_sor)
-    # return (gene_ase_events, gene_name, chr, 1.0, 0.0)
-
-    # apply Benjamini–Hochberg correction
-    if asj_p_values:
-        reject, adjusted_p_values, _, _ = multipletests(asj_p_values, alpha=0.05, method='fdr_bh')
-        min_p_value_index = np.argmin(adjusted_p_values)
-        most_significant_sor = asj_sors[min_p_value_index]
-        most_significant_p_value = adjusted_p_values[min_p_value_index]
-        return (gene_ase_events, gene_name, chr, most_significant_p_value, most_significant_sor)
-    return (gene_ase_events, gene_name, chr, 1.0, 0.0)
+            test_result = haplotype_event_test(absences, presents, reads_tags)
+            if test_result:
+                (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = test_result
+                gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
+                                                junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
+    return (gene_ase_events, gene_name, chr)
 
 
-def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, threads, p_value_threshold, sor_threshold):
+def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, threads):
     all_ase_events = {}  # key: (chr, start, end), value: AseEvent
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
         annotation_file, gene_types)
 
     # Prepare data for multiprocessing
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
-                       anno_intron_regions[gene_id], gene_region, bam_file, min_count, p_value_threshold, sor_threshold)
+                       anno_intron_regions[gene_id], gene_region, bam_file, min_count)
                       for gene_id, gene_region in anno_gene_regions.items()]
 
-    asj_gene_names, asj_gene_chrs, asj_gene_pvalues, asj_gene_sors = [], [], [], []
     # Use ProcessPoolExecutor for multiprocessing
     with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
         # Submit tasks and collect futures
@@ -582,13 +585,11 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
 
         # As each future completes, collect the results
         for future in concurrent.futures.as_completed(futures):
-            (gene_ase_events, gene_name, chrom, asj_pvalue, asj_sor) = future.result()
-            asj_gene_names.append(gene_name)
-            asj_gene_chrs.append(chrom)
-            asj_gene_pvalues.append(asj_pvalue)
-            asj_gene_sors.append(asj_sor)
+            (gene_ase_events, gene_name, chrom) = future.result()
             for event in gene_ase_events:
+                # multiple junctions in one gene_ase_events
                 if (event.chr, event.start, event.end) in all_ase_events.keys():
+                    # same junction choose the one with higher p-value
                     tmp_event = all_ase_events[(event.chr, event.start, event.end)]
                     if event.p_value < tmp_event.p_value:
                         tmp_event.p_value = event.p_value
@@ -604,19 +605,37 @@ def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, thr
                 else:
                     all_ase_events[(event.chr, event.start, event.end)] = event
 
-    # write to output file
-    with open(output_prefix + '.diff_splice.tsv', "w") as f:
+    # apply Benjamini–Hochberg correction for all junctions with enough reads\
+    pass_idx = []
+    p_values = []
+    junctions = list(all_ase_events.keys())
+    for idx in range(len(junctions)):
+        event = all_ase_events[junctions[idx]]
+        if event.hap1_absent + event.hap1_present + event.hap2_absent + event.hap2_present >= min_count:
+            pass_idx.append(idx)
+            p_values.append(event.p_value)
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    asj_genes = {}
+    with open(output_prefix + ".diff_splice.tsv", "w") as f:
         f.write(AseEvent.__header__() + "\n")
-        for key, event in all_ase_events.items():
-            f.write(event.__str__() + "\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            if reject[pi]:
+                event = all_ase_events[junctions[idx]]
+                event.p_value = adjusted_p_values[pi]
+                f.write(event.__str__() + "\n")
 
-    # # apply Benjamini–Hochberg correction
-    # reject, adjusted_p_values, _, _ = multipletests(asj_gene_pvalues, alpha=0.05, method='fdr_bh')
-    # write ASJ gene
+                for gene_name in event.gene_names:
+                    if gene_name not in asj_genes:
+                        asj_genes[gene_name] = [event.p_value, event.sor]
+                    else:
+                        if event.p_value < asj_genes[gene_name][0]:
+                            asj_genes[gene_name] = [event.p_value, event.sor]
+
     with open(output_prefix + ".asj_gene.tsv", "w") as f:
-        f.write(f"#Gene_name\tChr\tP_value\tSOR\n")
-        for gene_name, chrom, p_value, sor in zip(asj_gene_names, asj_gene_chrs, asj_gene_pvalues, asj_gene_sors):
-            f.write(f"{gene_name}\t{chrom}\t{p_value}\t{sor}\n")
+        f.write(f"#Gene_name\tP_value\tSOR\n")
+        for gene_name in asj_genes:
+            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}\n")
 
 
 if __name__ == "__main__":
@@ -631,10 +650,5 @@ if __name__ == "__main__":
                        help='Gene types to be analyzed. Default is ["protein_coding", "lncRNA"]', )
     parse.add_argument("-m", "--min_sup", help="Minimum support of phased reads for exon or junction", default=10,
                        type=int)
-    parse.add_argument("-p", "--p_value_threshold", help="P-value threshold for Fisher's exact test", default=0.05,
-                       type=float)
-    parse.add_argument("-s", "--sor_threshold", help="SOR threshold for filtering, higher value is more stringent",
-                       default=2.0, type=float)
     args = parse.parse_args()
-    analyze(args.annotation_file, args.bam_file, args.output_prefix, args.min_sup, args.gene_types, args.threads,
-            args.p_value_threshold, args.sor_threshold)
+    analyze(args.annotation_file, args.bam_file, args.output_prefix, args.min_sup, args.gene_types, args.threads)
