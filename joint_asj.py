@@ -399,14 +399,18 @@ def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
 
 
 class AseEvent:
-    def __init__(self, chr, start, end, novel, gene_name, strand, junction_set, phase_set, h1_tissues_str,
-                 h2_tissues_str, p_value):
+    def __init__(self, chr, start, end, novel, gene_name, strand, junction_set, phase_set, hap1_absent, hap1_present,
+                 hap2_absent, hap2_present, h1_tissues_str, h2_tissues_str, p_value):
         self.chr = chr
         self.start = start  # 1-based, inclusive
         self.end = end  # 1-based, inclusive
         self.strand = strand
         self.junction_set = junction_set
         self.phase_set = phase_set
+        self.hap1_absent = hap1_absent
+        self.hap1_present = hap1_present
+        self.hap2_absent = hap2_absent
+        self.hap2_present = hap2_present
         self.h1_tissues = h1_tissues_str
         self.h2_tissues = h2_tissues_str
         self.p_value = p_value
@@ -439,7 +443,6 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
     :param reads_tags:
     :return:
     """
-    events = []
     hap_absent_counts = defaultdict(lambda: {1: [], 2: []})  # key: phase set, value: {hap1: readnames, hap2: readnames}
     hap_present_counts = defaultdict(lambda: {1: [], 2: []})
     for read_name in absent_reads:
@@ -451,81 +454,73 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
         phase_set = reads_tags[read_name]["PS"]
         hap_present_counts[phase_set][hap].append(read_name)
     all_phase_sets = set(hap_absent_counts.keys()).union(set(hap_present_counts.keys()))
-    for phase_set in all_phase_sets:
-        if phase_set == ".":
-            continue
-        # key: tissue, value: {"absent": count, "present": count}
-        h1_count_table = defaultdict(lambda: {"absent": 0, "present": 0})
-        h2_count_table = defaultdict(lambda: {"absent": 0, "present": 0})
-        for readname in hap_absent_counts[phase_set][1]:
-            tissue = tissue_readname_map[readname]
-            h1_count_table[tissue]["absent"] += 1
-            h1_count_table[tissue]["present"] += 0
-            h2_count_table[tissue]["absent"] += 0
-            h2_count_table[tissue]["present"] += 0
-        for readname in hap_absent_counts[phase_set][2]:
-            tissue = tissue_readname_map[readname]
-            h2_count_table[tissue]["absent"] += 1
-            h2_count_table[tissue]["present"] += 0
-            h1_count_table[tissue]["absent"] += 0
-            h1_count_table[tissue]["present"] += 0
-        for readname in hap_present_counts[phase_set][1]:
-            tissue = tissue_readname_map[readname]
-            h1_count_table[tissue]["present"] += 1
-            h1_count_table[tissue]["absent"] += 0
-            h2_count_table[tissue]["present"] += 0
-            h2_count_table[tissue]["absent"] += 0
-        for readname in hap_present_counts[phase_set][2]:
-            tissue = tissue_readname_map[readname]
-            h2_count_table[tissue]["present"] += 1
-            h2_count_table[tissue]["absent"] += 0
-            h1_count_table[tissue]["present"] += 0
-            h1_count_table[tissue]["absent"] += 0
 
-        # # take phased reads without phase set into account
-        # hap_absent_counts[phase_set][1] = hap_absent_counts[phase_set].get(1, 0) + hap_absent_counts["."].get(1, 0)
-        # hap_absent_counts[phase_set][2] = hap_absent_counts[phase_set].get(2, 0) + hap_absent_counts["."].get(2, 0)
-        # hap_present_counts[phase_set][1] = hap_present_counts[phase_set].get(1, 0) + hap_present_counts["."].get(1, 0)
-        # hap_present_counts[phase_set][2] = hap_present_counts[phase_set].get(2, 0) + hap_present_counts["."].get(2, 0)
-        assert set(h1_count_table.keys()) == set(h2_count_table.keys())
-        tissues = list(h1_count_table.keys())
-        h1_cnts, h2_cnts = [], []
-        for tissue in tissues:
-            h1_cnts.append(h1_count_table[tissue]["absent"])
-            h1_cnts.append(h1_count_table[tissue]["present"])
-            h2_cnts.append(h2_count_table[tissue]["absent"])
-            h2_cnts.append(h2_count_table[tissue]["present"])
-        table = [[v + 1 for v in h1_cnts], [v + 1 for v in h2_cnts]]  # add 1 to avoid zero count
-        _, p_value, _, _ = chi2_contingency(table)
-        h1_tissue_str = []
-        h2_tissue_str = []
-        for tissue in tissues:
-            h1_tissue_str.append(f'{tissue}:{h1_count_table[tissue]["absent"]}:{h1_count_table[tissue]["present"]}')
-            h2_tissue_str.append(f'{tissue}:{h2_count_table[tissue]["absent"]}:{h2_count_table[tissue]["present"]}')
-        h1_tissue_str = ",".join(h1_tissue_str)
-        h2_tissue_str = ",".join(h2_tissue_str)
-
-        # # table = np.array([[hap_absent_counts[phase_set][1], hap_absent_counts[phase_set][2]],
-        # #                   [hap_present_counts[phase_set][1], hap_present_counts[phase_set][2]]])
-        # ## Fisher's exact test
-        # oddsratio, pvalue_fisher = fisher_exact(table)
-        # ## G-test
-        # g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-30, lambda_="log-likelihood")
-        # pvalue_gtest = np.min(pvalue_gtest)
-        #
-        # ## Use the maximum p-value from Fisher's exact test and G-test
-        # pvalue = max(pvalue_fisher, pvalue_gtest)
-        #
-        # ## Calculate SOR, refer to GATK AS_StrandOddsRatio, https://gatk.broadinstitute.org/hc/en-us/articles/360037224532-AS-StrandOddsRatio
-        # sor = calc_sor(hap_absent_counts[phase_set][1], hap_present_counts[phase_set][1],
-        #                hap_absent_counts[phase_set][2], hap_present_counts[phase_set][2])
-        event = (phase_set, p_value, h1_tissue_str, h2_tissue_str)
-        events.append(event)
-    return events
+    # get ps with the highest read coverage
+    ps_read_count = {}
+    for ps in all_phase_sets:
+        h1_a, h1_p, h2_a, h2_p = 0, 0, 0, 0
+        if ps in hap_absent_counts:
+            h1_a, h2_a = len(hap_absent_counts[ps][1]), len(hap_absent_counts[ps][2])
+        if ps in hap_present_counts:
+            h1_p, h2_p = len(hap_present_counts[ps][1]), len(hap_present_counts[ps][2])
+        ps_read_count[ps] = h1_a + h1_p + h2_a + h2_p
+    if ps_read_count:
+        most_reads_ps = sorted(ps_read_count, key=ps_read_count.get, reverse=True)[0]
+    else:
+        return None
+    phase_set = most_reads_ps
+    # key: tissue, value: {"absent": count, "present": count}
+    h1_count_table = defaultdict(lambda: {"absent": 0, "present": 0})
+    h2_count_table = defaultdict(lambda: {"absent": 0, "present": 0})
+    for readname in hap_absent_counts[phase_set][1]:
+        tissue = tissue_readname_map[readname]
+        h1_count_table[tissue]["absent"] += 1
+        h1_count_table[tissue]["present"] += 0
+        h2_count_table[tissue]["absent"] += 0
+        h2_count_table[tissue]["present"] += 0
+    for readname in hap_absent_counts[phase_set][2]:
+        tissue = tissue_readname_map[readname]
+        h2_count_table[tissue]["absent"] += 1
+        h2_count_table[tissue]["present"] += 0
+        h1_count_table[tissue]["absent"] += 0
+        h1_count_table[tissue]["present"] += 0
+    for readname in hap_present_counts[phase_set][1]:
+        tissue = tissue_readname_map[readname]
+        h1_count_table[tissue]["present"] += 1
+        h1_count_table[tissue]["absent"] += 0
+        h2_count_table[tissue]["present"] += 0
+        h2_count_table[tissue]["absent"] += 0
+    for readname in hap_present_counts[phase_set][2]:
+        tissue = tissue_readname_map[readname]
+        h2_count_table[tissue]["present"] += 1
+        h2_count_table[tissue]["absent"] += 0
+        h1_count_table[tissue]["present"] += 0
+        h1_count_table[tissue]["absent"] += 0
+    assert set(h1_count_table.keys()) == set(h2_count_table.keys())
+    tissues = list(h1_count_table.keys())
+    h1_cnts, h2_cnts = [], []
+    for tissue in tissues:
+        h1_cnts.append(h1_count_table[tissue]["absent"])
+        h1_cnts.append(h1_count_table[tissue]["present"])
+        h2_cnts.append(h2_count_table[tissue]["absent"])
+        h2_cnts.append(h2_count_table[tissue]["present"])
+    table = [[v + 1 for v in h1_cnts], [v + 1 for v in h2_cnts]]  # add 1 to avoid zero count
+    _, p_value, _, _ = chi2_contingency(table)
+    h1_tissue_str = []
+    h2_tissue_str = []
+    for tissue in tissues:
+        h1_tissue_str.append(f'{tissue}:{h1_count_table[tissue]["absent"]}:{h1_count_table[tissue]["present"]}')
+        h2_tissue_str.append(f'{tissue}:{h2_count_table[tissue]["absent"]}:{h2_count_table[tissue]["present"]}')
+    h1_tissue_str = ",".join(h1_tissue_str)
+    h2_tissue_str = ",".join(h2_tissue_str)
+    event = (phase_set, p_value, h1_tissue_str, h2_tissue_str,
+             len(hap_absent_counts[phase_set][1]), len(hap_present_counts[phase_set][1]),
+             len(hap_absent_counts[phase_set][2]), len(hap_present_counts[phase_set][2]))
+    return event
 
 
 def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region, bam_file, min_count,
-                 p_value_threshold, tissue_readname_map):
+                 tissue_readname_map):
     chr = gene_region["chr"]
     start = gene_region["start"]
     end = gene_region["end"]
@@ -568,9 +563,7 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         del reads_tags[qname]
 
     gene_ase_events = []
-
     # Analyze junction regions
-    asj_p_values = []
     for junc_cluster in junctions_clusters:
         if len(junc_cluster) == 0:
             continue
@@ -583,34 +576,17 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             # absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
             #                                           reads_introns)
             absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
-            test_results = haplotype_event_test(absences, presents, reads_tags, tissue_readname_map)
-            for event in test_results:
-                (phase_set, pvalue, h1_tissue_str, h2_tissue_str) = event
-                asj_p_values.append(pvalue)
-                if pvalue < p_value_threshold:
-                    gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
-                                                    junction_set, phase_set, h1_tissue_str, h2_tissue_str, pvalue))
-    # ## Fisher's method to combine p-values
-    # if asj_p_values:
-    #     min_p_value_index = np.argmin(asj_p_values)
-    #     most_significant_sor = asj_sors[min_p_value_index]
-    #     X2 = -2 * sum([np.log(p + 1e-300) for p in asj_p_values])  # avoid log(0)
-    #     dof = 2 * len(asj_p_values)
-    #     combined_asj_p_value = chi2.sf(X2, dof)
-    #     return (gene_ase_events, gene_name, chr, combined_asj_p_value, most_significant_sor)
-    # return (gene_ase_events, gene_name, chr, 1.0, 0.0)
-
-    # apply Benjamini–Hochberg correction
-    if asj_p_values:
-        reject, adjusted_p_values, _, _ = multipletests(asj_p_values, alpha=0.05, method='fdr_bh')
-        min_p_value_index = np.argmin(adjusted_p_values)
-        most_significant_p_value = adjusted_p_values[min_p_value_index]
-        return (gene_ase_events, gene_name, chr, most_significant_p_value)
-    return (gene_ase_events, gene_name, chr, 1.0)
+            test_result = haplotype_event_test(absences, presents, reads_tags, tissue_readname_map)
+            if test_result:
+                (phase_set, pvalue, h1_tissue_str, h2_tissue_str, h1_absent, h1_present, h2_absent,
+                 h2_present) = test_result
+                gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
+                                                junction_set, phase_set, h1_absent, h1_present, h2_absent, h2_present,
+                                                h1_tissue_str, h2_tissue_str, pvalue))
+    return (gene_ase_events, gene_name, chr)
 
 
-def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_count, gene_types, threads,
-            p_value_threshold):
+def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_count, gene_types, threads):
     tissue_readname_map = get_tissue_readnames(tissue_readnames)
     all_ase_events = {}  # key: (chr, start, end), value: AseEvent
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
@@ -618,10 +594,9 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
 
     # Prepare data for multiprocessing
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
-                       anno_intron_regions[gene_id], gene_region, bam_file, min_count, p_value_threshold) for
+                       anno_intron_regions[gene_id], gene_region, bam_file, min_count) for
                       gene_id, gene_region in anno_gene_regions.items()]
 
-    asj_gene_names, asj_gene_chrs, asj_gene_pvalues = [], [], []
     # Use ProcessPoolExecutor for multiprocessing
     with Manager() as manager:
         shared_tissue_readname_map = manager.dict(tissue_readname_map)
@@ -632,16 +607,17 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
 
             # As each future completes, collect the results
             for future in concurrent.futures.as_completed(futures):
-                (gene_ase_events, gene_name, chrom, asj_pvalue) = future.result()
-                asj_gene_names.append(gene_name)
-                asj_gene_chrs.append(chrom)
-                asj_gene_pvalues.append(asj_pvalue)
+                (gene_ase_events, gene_name, chrom) = future.result()
                 for event in gene_ase_events:
                     if (event.chr, event.start, event.end) in all_ase_events.keys():
                         # same junction, update the event if it has a higher p-value
                         tmp_event = all_ase_events[(event.chr, event.start, event.end)]
                         if event.p_value < tmp_event.p_value:
                             tmp_event.p_value = event.p_value
+                            tmp_event.hap1_absent = event.hap1_absent
+                            tmp_event.hap1_present = event.hap1_present
+                            tmp_event.hap2_absent = event.hap2_absent
+                            tmp_event.hap2_present = event.hap2_present
                             tmp_event.h1_tissues = event.h1_tissues
                             tmp_event.h2_tissues = event.h2_tissues
                             tmp_event.phase_set = event.phase_set
@@ -651,11 +627,37 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
                     else:
                         all_ase_events[(event.chr, event.start, event.end)] = event
 
-    # write to output file
-    with open(output_prefix + '.joint_asj.tsv', "w") as f:
+    # Perform multiple testing correction
+    pass_idx = []
+    p_values = []
+    junctions = list(all_ase_events.keys())
+    for idx in range(len(junctions)):
+        event = all_ase_events[junctions[idx]]
+        if event.hap1_absent + event.hap1_present + event.hap2_absent + event.hap2_present >= min_count:
+            pass_idx.append(idx)
+            p_values.append(event.p_value)
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    asj_genes = {}
+    with open(output_prefix + ".joint_diff_splice.tsv", "w") as f:
         f.write(AseEvent.__header__() + "\n")
-        for key, event in all_ase_events.items():
-            f.write(event.__str__() + "\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            if reject[pi]:
+                event = all_ase_events[junctions[idx]]
+                event.p_value = adjusted_p_values[pi]
+                f.write(event.__str__() + "\n")
+
+                for gene_name in event.gene_names:
+                    if gene_name not in asj_genes:
+                        asj_genes[gene_name] = [event.p_value, event.h1_tissues, event.h2_tissues]
+                    else:
+                        if event.p_value < asj_genes[gene_name][0]:
+                            asj_genes[gene_name] = [event.p_value, event.h1_tissues, event.h2_tissues]
+
+    with open(output_prefix + ".joint_asj_gene.tsv", "w") as f:
+        f.write(f"#Gene_name\tP_value\tHap1_tissues\tHap2_tissues\n")
+        for gene_name in asj_genes:
+            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}\t{asj_genes[gene_name][2]}\n")
 
 
 if __name__ == "__main__":
@@ -670,8 +672,6 @@ if __name__ == "__main__":
                        help='Gene types to be analyzed. Default is ["protein_coding", "lncRNA"]', )
     parse.add_argument("-m", "--min_sup", help="Minimum support of phased reads for exon or junction", default=10,
                        type=int)
-    parse.add_argument("-p", "--p_value_threshold", help="P-value threshold for Fisher's exact test", default=0.05,
-                       type=float)
     args = parse.parse_args()
     analyze(args.annotation_file, args.bam_file, args.tissue_readnames, args.output_prefix, args.min_sup,
-            args.gene_types, args.threads, args.p_value_threshold)
+            args.gene_types, args.threads)

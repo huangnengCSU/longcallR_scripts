@@ -389,71 +389,42 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
                 phase_set_hap_count[ps][hp] += 1
                 ps_hp_read_names[ps][hp].append(rname)
 
-    # Step 1: Collect p-values for each phase set
-    p_values = []
-    phase_sets = []
-    hap_counts = []
-    tissue_counts = []
+    # get the ps with the most reads
+    ps_read_cnt = {ps: sum(hap_count.values()) for ps, hap_count in phase_set_hap_count.items()}
+    if ps_read_cnt:
+        most_reads_ps = sorted(ps_read_cnt, key=ps_read_cnt.get, reverse=True)[0]
+    else:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
 
-    for ps, hap_count in phase_set_hap_count.items():
-        if hap_count[1] + hap_count[2] < min_count:
-            continue
-        # Binomial test p-value
-        total_reads = hap_count[1] + hap_count[2]
-        p_value_ase = binomtest(hap_count[1], total_reads, 0.5, alternative='two-sided').pvalue
-        p_values.append(p_value_ase)
-        phase_sets.append(ps)
-        hap_counts.append((hap_count[1], hap_count[2]))
-        tissue_count = defaultdict(lambda: defaultdict(int))
-        for rname in ps_hp_read_names[ps][1]:
-            tissue = tissue_readname_map[rname]
-            tissue_count[1][tissue] += 1  # key: haplotype, value: {tissue: count}
-        for rname in ps_hp_read_names[ps][2]:
-            tissue = tissue_readname_map[rname]
-            tissue_count[2][tissue] += 1
-        tissue_counts.append(tissue_count)
-
-    # Step 2: Apply Benjamini–Hochberg correction
-    if p_values:
-        reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-
-        # Step 3: Find the most significant adjusted p-value
-        min_p_value_index = adjusted_p_values.argmin()
-        most_significant_phase_set = phase_sets[min_p_value_index]
-        h1_count, h2_count = hap_counts[min_p_value_index]
-        tissue_count = tissue_counts[min_p_value_index]  # key: haplotype, value: {tissue: count}
-        h1_tissue_str = []
-        h2_tissue_str = []
-        all_tissues = set(list(tissue_count[1].keys()) + list(tissue_count[2].keys()))
-        for tissue in all_tissues:
-            if tissue not in tissue_count[1]:
-                tissue_count[1][tissue] = 0
-            h1_tissue_str.append(f"{tissue}:{tissue_count[1][tissue]}")
-            if tissue not in tissue_count[2]:
-                tissue_count[2][tissue] = 0
-            h2_tissue_str.append(f"{tissue}:{tissue_count[2][tissue]}")
-        # for tissue, cnt in tissue_count[1].items():
-        #     h1_tissue_str.append(f"{tissue}:{cnt}")
-        # for tissue, cnt in tissue_count[2].items():
-        #     h2_tissue_str.append(f"{tissue}:{cnt}")
-        h1_tissue_str = ",".join(h1_tissue_str)
-        h2_tissue_str = ",".join(h2_tissue_str)
-        adjusted_p_value = adjusted_p_values[min_p_value_index]
-        return (gene_name, gene_region["chr"], adjusted_p_value, most_significant_phase_set, h1_count, h2_count,
-                h1_tissue_str, h2_tissue_str)
-
-    # # fisher's method
-    # if p_values:
-    #     min_p_value_index = np.argmin(p_values)
-    #     most_significant_phase_set = phase_sets[min_p_value_index]
-    #     h1_count, h2_count = hap_counts[min_p_value_index]
-    #     X2 = -2 * sum([np.log(p + 1e-300) for p in p_values])  # avoid log(0)
-    #     dof = 2 * len(p_values)
-    #     combined_p_value = chi2.sf(X2, dof)
-    #     return (gene_name, gene_region["chr"], combined_p_value, most_significant_phase_set, h1_count, h2_count)
-
-    # If no valid p-values are found, return defaults
-    return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, "", "")
+    hap_count = phase_set_hap_count[most_reads_ps]
+    hap1_cnt = hap_count[1]
+    hap2_cnt = hap_count[2]
+    if hap1_cnt + hap2_cnt < min_count:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
+    # Binomial test p-value
+    total_reads = hap1_cnt + hap2_cnt
+    p_value_ase = binomtest(hap1_cnt, total_reads, 0.5, alternative='two-sided').pvalue
+    tissue_count = defaultdict(lambda: defaultdict(int))
+    for rname in ps_hp_read_names[most_reads_ps][1]:
+        tissue = tissue_readname_map[rname]
+        tissue_count[1][tissue] += 1  # key: haplotype, value: {tissue: count}
+    for rname in ps_hp_read_names[most_reads_ps][2]:
+        tissue = tissue_readname_map[rname]
+        tissue_count[2][tissue] += 1
+    h1_tissue_str = []
+    h2_tissue_str = []
+    all_tissues = set(list(tissue_count[1].keys()) + list(tissue_count[2].keys()))
+    for tissue in all_tissues:
+        if tissue not in tissue_count[1]:
+            tissue_count[1][tissue] = 0
+        h1_tissue_str.append(f"{tissue}:{tissue_count[1][tissue]}")
+        if tissue not in tissue_count[2]:
+            tissue_count[2][tissue] = 0
+        h2_tissue_str.append(f"{tissue}:{tissue_count[2][tissue]}")
+    h1_tissue_str = ",".join(h1_tissue_str)
+    h2_tissue_str = ",".join(h2_tissue_str)
+    return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, hap1_cnt, hap2_cnt,
+            h1_tissue_str, h2_tissue_str)
 
 
 def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, threads, gene_types, min_support):
@@ -477,14 +448,22 @@ def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, thr
                        for gene_data in gene_args]
             for future in concurrent.futures.as_completed(futures):
                 results.append(future.result())
-    # # apply Benjamini–Hochberg correction
-    # p_values = [result[2] for result in results]
-    # reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    # apply Benjamini–Hochberg correction
+    pass_idx = []
+    p_values = []
+    for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str) in enumerate(results):
+        if h1 + h2 >= min_support:
+            pass_idx.append(idx)
+            p_values.append(p_value)
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+
     with open(out_file, "w") as f:
         f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_tissues\tH2_tissues\n")
-        for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str) in enumerate(results):
-            # p_value = adjusted_p_values[idx]
-            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            if reject[pi]:
+                gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
+                f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
 
 
 if __name__ == "__main__":
