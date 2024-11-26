@@ -461,9 +461,11 @@ def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, thr
         f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_tissues\tH2_tissues\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
-            if reject[pi]:
-                gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
-                f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
+            gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
+            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
+            # if reject[pi]:
+            #     gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
+            #     f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
 
 
 if __name__ == "__main__":
