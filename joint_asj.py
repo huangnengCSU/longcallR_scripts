@@ -583,7 +583,7 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
                 gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
                                                 junction_set, phase_set, h1_absent, h1_present, h2_absent, h2_present,
                                                 h1_tissue_str, h2_tissue_str, pvalue))
-    return (gene_ase_events, gene_name, chr)
+    return gene_ase_events
 
 
 def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_count, gene_types, threads):
@@ -607,7 +607,7 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
 
             # As each future completes, collect the results
             for future in concurrent.futures.as_completed(futures):
-                (gene_ase_events, gene_name, chrom) = future.result()
+                gene_ase_events = future.result()
                 for event in gene_ase_events:
                     if (event.chr, event.start, event.end) in all_ase_events.keys():
                         # same junction, update the event if it has a higher p-value
@@ -642,22 +642,33 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
         f.write(AseEvent.__header__() + "\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
-            if reject[pi]:
-                event = all_ase_events[junctions[idx]]
-                event.p_value = adjusted_p_values[pi]
-                f.write(event.__str__() + "\n")
+            event = all_ase_events[junctions[idx]]
+            event.p_value = adjusted_p_values[pi]
+            f.write(event.__str__() + "\n")
 
-                for gene_name in event.gene_names:
-                    if gene_name not in asj_genes:
-                        asj_genes[gene_name] = [event.p_value, event.h1_tissues, event.h2_tissues]
-                    else:
-                        if event.p_value < asj_genes[gene_name][0]:
-                            asj_genes[gene_name] = [event.p_value, event.h1_tissues, event.h2_tissues]
+            for gene_name in event.gene_names:
+                if gene_name not in asj_genes:
+                    asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
+                else:
+                    if event.p_value < asj_genes[gene_name][1]:
+                        asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
+            # if reject[pi]:
+            #     event = all_ase_events[junctions[idx]]
+            #     event.p_value = adjusted_p_values[pi]
+            #     f.write(event.__str__() + "\n")
+            #
+            #     for gene_name in event.gene_names:
+            #         if gene_name not in asj_genes:
+            #             asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
+            #         else:
+            #             if event.p_value < asj_genes[gene_name][1]:
+            #                 asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
 
     with open(output_prefix + ".joint_asj_gene.tsv", "w") as f:
-        f.write(f"#Gene_name\tP_value\tHap1_tissues\tHap2_tissues\n")
+        f.write(f"#Gene_name\tChr\tP_value\tHap1_tissues\tHap2_tissues\n")
         for gene_name in asj_genes:
-            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}\t{asj_genes[gene_name][2]}\n")
+            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}"
+                    f"\t{asj_genes[gene_name][2]}\t{asj_genes[gene_name][3]}\n")
 
 
 if __name__ == "__main__":
