@@ -691,11 +691,15 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
                 "\tP-value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
-            if reject[pi]:
-                gene_name, chrom, p_value, ps, h1_norm, h2_norm, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat = results[idx]
-                p_value = adjusted_p_values[pi]
-                f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{h1_norm}\t{h2_norm}"
-                        f"\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
+            gene_name, chrom, p_value, ps, h1_norm, h2_norm, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat = results[idx]
+            p_value = adjusted_p_values[pi]
+            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{h1_norm}\t{h2_norm}"
+                    f"\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
+            # if reject[pi]:
+            #     gene_name, chrom, p_value, ps, h1_norm, h2_norm, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat = results[idx]
+            #     p_value = adjusted_p_values[pi]
+            #     f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{h1_norm}\t{h2_norm}"
+            #             f"\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
 
 
 if __name__ == "__main__":
