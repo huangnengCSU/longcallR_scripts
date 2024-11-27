@@ -118,7 +118,6 @@ def merge_gene_exon_regions(exon_regions):
     for gene_id, transcripts in exon_regions.items():
         collapsed_exons = IntervalTree()
         chromosome = None
-
         # Iterate over transcripts and collect intervals
         for transcript_id, exons in transcripts.items():
             for (chr, start, end) in exons:
@@ -127,22 +126,10 @@ def merge_gene_exon_regions(exon_regions):
                 else:
                     assert chromosome == chr, f"Error: Inconsistent chromosome in gene {gene_id}"
                 collapsed_exons.add(Interval(start, end + 1))  # Interval is left-inclusive, right-exclusive
-
         # Merge overlapping intervals and adjust to 1-based closed intervals
         collapsed_exons.merge_overlaps()
         collapsed_exons = sorted((interval.begin, interval.end - 1) for interval in collapsed_exons)
         merged_genes_exons[chromosome][gene_id].extend(collapsed_exons)
-
-        # # Insert collapsed exons into merged_genes_exons_sorted_by_start using binary search
-        # if chromosome not in merged_genes_exons_sorted_by_start:
-        #     merged_genes_exons_sorted_by_start[chromosome] = [(collapsed_exons, gene_id, gene_names[gene_id])]
-        # else:
-        #     # Extract start positions for binary search
-        #     start_positions = [elem[0][0][0] for elem in merged_genes_exons_sorted_by_start[chromosome]]
-        #     insert_position = bisect.bisect_left(start_positions, collapsed_exons[0][0])
-        #     merged_genes_exons_sorted_by_start[chromosome].insert(insert_position,
-        #                                                           (collapsed_exons, gene_id, gene_names[gene_id]))
-    # return merged_genes_exons_sorted_by_start
     return merged_genes_exons
 
 
@@ -390,15 +377,15 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
                 ps_hp_read_names[ps][hp].append(rname)
 
     # get the ps with the most reads
-    ps_read_cnt = {ps: sum(hap_count.values()) for ps, hap_count in phase_set_hap_count.items()}
+    ps_read_cnt = {}
+    for ps, hap_cnt in phase_set_hap_count.items():
+        ps_read_cnt[ps] = hap_cnt[1] + hap_cnt[2]
     if ps_read_cnt:
-        most_reads_ps = sorted(ps_read_cnt, key=ps_read_cnt.get, reverse=True)[0]
+        most_reads_ps = sorted(ps_read_cnt.items(), key=lambda x: x[1], reverse=True)[0][0]
     else:
         return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
-
     hap_count = phase_set_hap_count[most_reads_ps]
-    hap1_cnt = hap_count[1]
-    hap2_cnt = hap_count[2]
+    hap1_cnt, hap2_cnt = hap_count[1], hap_count[2]
     if hap1_cnt + hap2_cnt < min_count:
         return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
     # Binomial test p-value
@@ -451,21 +438,20 @@ def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, thr
     # apply Benjamini–Hochberg correction
     pass_idx = []
     p_values = []
+    print(f"total number of genes: {len(results)}")
     for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str) in enumerate(results):
         if h1 + h2 >= min_support:
             pass_idx.append(idx)
             p_values.append(p_value)
+    print(f"number of genes with at least {min_support} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
-
     with open(out_file, "w") as f:
         f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_tissues\tH2_tissues\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
             gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
+            p_value = adjusted_p_values[pi]
             f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
-            # if reject[pi]:
-            #     gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
-            #     f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
 
 
 if __name__ == "__main__":
