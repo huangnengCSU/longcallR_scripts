@@ -143,10 +143,6 @@ def get_exon_intron_regions(read):
             current_position += length
         else:
             pass
-        # elif operation in {1, 4, 5}:  # 'I', 'S', 'H' operations
-        #     pass
-        # else:
-        #     current_position += length
     return exon_regions, intron_regions
 
 
@@ -415,16 +411,15 @@ class AseEvent:
         self.h2_tissues = h2_tissues_str
         self.p_value = p_value
         self.novel = novel
-        self.gene_names = [gene_name]
+        self.gene_name = gene_name
 
     @staticmethod
     def __header__():
-        return ("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_tissues\tHap2_tissues\tP_value\tNovel\tGene_names")
+        return ("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_tissues\tHap2_tissues\tP_value\tNovel\tGene_name")
 
     def __str__(self):
-        gene_names = ",".join(set(self.gene_names))
         return (f"{self.chr}:{self.start}-{self.end}\t{self.strand}\t{self.junction_set}\t{self.phase_set}\t"
-                f"{self.h1_tissues}\t{self.h2_tissues}\t{self.p_value}\t{self.novel}\t{gene_names}")
+                f"{self.h1_tissues}\t{self.h2_tissues}\t{self.p_value}\t{self.novel}\t{self.gene_name}")
 
 
 def calc_sor(hap1_absent, hap1_present, hap2_absent, hap2_present):
@@ -454,18 +449,14 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
         phase_set = reads_tags[read_name]["PS"]
         hap_present_counts[phase_set][hap].append(read_name)
     all_phase_sets = set(hap_absent_counts.keys()).union(set(hap_present_counts.keys()))
-
     # get ps with the highest read coverage
     ps_read_count = {}
     for ps in all_phase_sets:
-        h1_a, h1_p, h2_a, h2_p = 0, 0, 0, 0
-        if ps in hap_absent_counts:
-            h1_a, h2_a = len(hap_absent_counts[ps][1]), len(hap_absent_counts[ps][2])
-        if ps in hap_present_counts:
-            h1_p, h2_p = len(hap_present_counts[ps][1]), len(hap_present_counts[ps][2])
+        h1_a, h2_a = len(hap_absent_counts[ps][1]), len(hap_absent_counts[ps][2])
+        h1_p, h2_p = len(hap_present_counts[ps][1]), len(hap_present_counts[ps][2])
         ps_read_count[ps] = h1_a + h1_p + h2_a + h2_p
     if ps_read_count:
-        most_reads_ps = sorted(ps_read_count, key=ps_read_count.get, reverse=True)[0]
+        most_reads_ps = sorted(ps_read_count.items(), key=lambda x: x[1], reverse=True)[0][0]
     else:
         return None
     phase_set = most_reads_ps
@@ -504,7 +495,8 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
         h1_cnts.append(h1_count_table[tissue]["present"])
         h2_cnts.append(h2_count_table[tissue]["absent"])
         h2_cnts.append(h2_count_table[tissue]["present"])
-    table = [[v + 1 for v in h1_cnts], [v + 1 for v in h2_cnts]]  # add 1 to avoid zero count
+    table = [[v + 1 for v in h1_cnts], [v + 1 for v in h2_cnts]]  # 2 x 2n table
+    # TODO: 4 x n table test?
     _, p_value, _, _ = chi2_contingency(table)
     h1_tissue_str = []
     h2_tissue_str = []
@@ -577,12 +569,14 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             #                                           reads_introns)
             absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
             test_result = haplotype_event_test(absences, presents, reads_tags, tissue_readname_map)
-            if test_result:
-                (phase_set, pvalue, h1_tissue_str, h2_tissue_str, h1_absent, h1_present, h2_absent,
-                 h2_present) = test_result
-                gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
-                                                junction_set, phase_set, h1_absent, h1_present, h2_absent, h2_present,
-                                                h1_tissue_str, h2_tissue_str, pvalue))
+            if test_result is None:
+                continue
+            (
+                phase_set, pvalue, h1_tissue_str, h2_tissue_str, h1_absent, h1_present, h2_absent,
+                h2_present) = test_result
+            gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
+                                            junction_set, phase_set, h1_absent, h1_present, h2_absent, h2_present,
+                                            h1_tissue_str, h2_tissue_str, pvalue))
     return gene_ase_events
 
 
@@ -591,84 +585,61 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
     all_ase_events = {}  # key: (chr, start, end), value: AseEvent
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
         annotation_file, gene_types)
-
-    # Prepare data for multiprocessing
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
                        anno_intron_regions[gene_id], gene_region, bam_file, min_count) for
                       gene_id, gene_region in anno_gene_regions.items()]
-
-    # Use ProcessPoolExecutor for multiprocessing
     with Manager() as manager:
         shared_tissue_readname_map = manager.dict(tissue_readname_map)
         with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
-            # Submit tasks and collect futures
             futures = [executor.submit(analyze_gene, *gene_data, shared_tissue_readname_map) for gene_data in
                        gene_data_list]
-
-            # As each future completes, collect the results
             for future in concurrent.futures.as_completed(futures):
                 gene_ase_events = future.result()
                 for event in gene_ase_events:
-                    if (event.chr, event.start, event.end) in all_ase_events.keys():
-                        # same junction, update the event if it has a higher p-value
-                        tmp_event = all_ase_events[(event.chr, event.start, event.end)]
-                        if event.p_value < tmp_event.p_value:
-                            tmp_event.p_value = event.p_value
-                            tmp_event.hap1_absent = event.hap1_absent
-                            tmp_event.hap1_present = event.hap1_present
-                            tmp_event.hap2_absent = event.hap2_absent
-                            tmp_event.hap2_present = event.hap2_present
-                            tmp_event.h1_tissues = event.h1_tissues
-                            tmp_event.h2_tissues = event.h2_tissues
-                            tmp_event.phase_set = event.phase_set
-                        tmp_event.gene_names.extend(event.gene_names)
-                        if not event.novel:
-                            tmp_event.novel = event.novel
+                    # multiple junctions in one gene_ase_events
+                    key = (event.chr, event.start, event.end)
+                    if key in all_ase_events.keys():
+                        all_ase_events[key][event.gene_name] = event
                     else:
-                        all_ase_events[(event.chr, event.start, event.end)] = event
+                        all_ase_events[key] = {event.gene_name: event}
 
     # Perform multiple testing correction
-    pass_idx = []
+    pass_idx = []  # index of junctions
     p_values = []
-    junctions = list(all_ase_events.keys())
+    junctions = []
+    for key in all_ase_events.keys():
+        for gname in all_ase_events[key].keys():
+            junctions.append((key, gname))  # key: (chr, start, end), gname: gene name
+    print(f"Total junctions: {len(junctions)}")
     for idx in range(len(junctions)):
-        event = all_ase_events[junctions[idx]]
+        junc = junctions[idx][0]
+        gname = junctions[idx][1]
+        event = all_ase_events[junc][gname]
         if event.hap1_absent + event.hap1_present + event.hap2_absent + event.hap2_present >= min_count:
             pass_idx.append(idx)
             p_values.append(event.p_value)
+    print(f"number of junctions with at least {min_count} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     asj_genes = {}
     with open(output_prefix + ".joint_diff_splice.tsv", "w") as f:
         f.write(AseEvent.__header__() + "\n")
         for pi in range(len(pass_idx)):
-            idx = pass_idx[pi]
-            event = all_ase_events[junctions[idx]]
+            junc = junctions[pass_idx[pi]][0]
+            gname = junctions[pass_idx[pi]][1]
+            event = all_ase_events[junc][gname]
             event.p_value = adjusted_p_values[pi]
             f.write(event.__str__() + "\n")
-
-            for gene_name in event.gene_names:
-                if gene_name not in asj_genes:
-                    asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
-                else:
-                    if event.p_value < asj_genes[gene_name][1]:
-                        asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
-            # if reject[pi]:
-            #     event = all_ase_events[junctions[idx]]
-            #     event.p_value = adjusted_p_values[pi]
-            #     f.write(event.__str__() + "\n")
-            #
-            #     for gene_name in event.gene_names:
-            #         if gene_name not in asj_genes:
-            #             asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
-            #         else:
-            #             if event.p_value < asj_genes[gene_name][1]:
-            #                 asj_genes[gene_name] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
-
+            if gname not in asj_genes:
+                asj_genes[gname] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
+            else:
+                if event.p_value < asj_genes[gname][1]:
+                    asj_genes[gname] = [event.chr, event.p_value, event.h1_tissues, event.h2_tissues]
+    print(f"number of genes with allele-specific junctions: {len(asj_genes.keys())}")
     with open(output_prefix + ".joint_asj_gene.tsv", "w") as f:
         f.write(f"#Gene_name\tChr\tP_value\tHap1_tissues\tHap2_tissues\n")
         for gene_name in asj_genes:
-            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}"
-                    f"\t{asj_genes[gene_name][2]}\t{asj_genes[gene_name][3]}\n")
+            chr, p_value, h1_tissues, h2_tissues = asj_genes[gene_name]
+            f.write(f"{gene_name}\t{chr}\t{p_value}\t{h1_tissues}\t{h2_tissues}\n")
 
 
 if __name__ == "__main__":

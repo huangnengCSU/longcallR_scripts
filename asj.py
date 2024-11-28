@@ -132,10 +132,6 @@ def get_exon_intron_regions(read):
             current_position += length
         else:
             pass
-        # elif operation in {1, 4, 5}:  # 'I', 'S', 'H' operations
-        #     pass
-        # else:
-        #     current_position += length
     return exon_regions, intron_regions
 
 
@@ -180,90 +176,13 @@ def parse_reads_from_alignment(bam_file, chr, start_pos, end_pos):
     return reads_positions, reads_exons, reads_junctions, reads_tags
 
 
-def cluster_exons(reads_exons, min_count=10):
-    exons = {}  # key: (start, end), value: count
-    for read_name, exon_regions in reads_exons.items():
-        # single exon
-        if len(exon_regions) == 1:
-            pass
-        # two exons
-        if len(exon_regions) == 2:
-            pass
-        # more than two exons
-        if len(exon_regions) > 2:
-            for i, exon_region in enumerate(exon_regions):
-                if i == 0 or i == len(exon_regions) - 1:
-                    continue
-                exons[exon_region] = exons.get(exon_region, 0) + 1
-    # delete exons with count less than 10
-    exons = {k: v for k, v in exons.items() if v >= min_count}
-    return exons
-
-
-def cluster_junctions(reads_junctions, min_count=10):
-    junctions = {}  # key: (start, end), value: count
-    for read_name, junction_regions in reads_junctions.items():
-        for junction_region in junction_regions:
-            junctions[junction_region] = junctions.get(junction_region, 0) + 1
-    # delete junctions with count less than 10
-    junctions = {k: v for k, v in junctions.items() if v >= min_count}
-    return junctions
-
-
-def cluster_junctions_connected_components(reads_junctions, min_count=10):
-    junctions_clusters = []
-    junctions = {}  # key: (start, end), value: count
-
-    # Count occurrences of each junction region
-    for read_name, junction_regions in reads_junctions.items():
-        for junction_region in junction_regions:
-            junctions[junction_region] = junctions.get(junction_region, 0) + 1
-
-    # Remove junctions with count less than min_count
-    junctions = {k: v for k, v in junctions.items() if v >= min_count}
-
-    # Create a graph
-    G = nx.Graph()
-
-    # Add nodes for each junction
-    for junction in junctions.keys():
-        G.add_node(junction)  # "junction = (intron_start, intron_end)"
-
-    # Add edges between overlapping junctions (sharing start or end positions)
-    junction_list = list(junctions.keys())
-    for i in range(len(junction_list)):
-        for j in range(i + 1, len(junction_list)):
-            start1, end1 = junction_list[i]
-            start2, end2 = junction_list[j]
-
-            # Check if they share a start or end position
-            if start1 == start2 or end1 == end2:
-                G.add_edge(junction_list[i], junction_list[j])
-
-    # Find connected components
-    connected_components = list(nx.connected_components(G))
-
-    # Collect the clusters of junctions
-    for component in connected_components:
-        junctions_clusters.append(list(component))
-
-    return junctions_clusters, junctions
-
-
 def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, min_count=10):
     junctions_clusters = []
     junctions = {}  # key: (start, end), value: count
-    # junctions_extended = {}  # key: (start, end), value: (extended_start, extended_end)
-
-    # Count occurrences of each junction region
     for read_name, junction_regions in reads_junctions.items():
         for junction_region in junction_regions:
             junctions[junction_region] = junctions.get(junction_region, 0) + 1
-
-    # Remove junctions with count less than min_count
     junctions = {k: v for k, v in junctions.items() if v >= min_count}
-
-    # Count occurrences of each exon region
     exons = {}  # key: (start, end), value: count
     for read_name, exon_regions in reads_exons.items():
         if len(exon_regions) == 0:
@@ -280,50 +199,15 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
                 if i == 0 or i == len(exon_regions) - 1:
                     continue
                 exons[exon_region] = exons.get(exon_region, 0) + 1
-
-    # all_exons = {}  # key: (start, end), value: count
-    # for read_name, exon_regions in reads_exons.items():
-    #     if len(exon_regions) == 0:
-    #         pass
-    #     # single exon
-    #     if len(exon_regions) == 1:
-    #         pass
-    #     for i, exon_region in enumerate(exon_regions):
-    #         all_exons[exon_region] = all_exons.get(exon_region, 0) + 1
-    #
-    # for (junc_start, junc_end) in junctions.keys():
-    #     previous_exons = []
-    #     next_exons = []
-    #     for (exon_start, exon_end) in all_exons.keys():
-    #         if exon_end + 1 == junc_start:
-    #             previous_exons.append((exon_start, exon_end))
-    #         if exon_start - 1 == junc_end:
-    #             next_exons.append((exon_start, exon_end))
-    #     # print(f"{junc_start}-{junc_end}, previous_exons: {len(previous_exons)}, next_exons: {len(next_exons)}")
-    #     if previous_exons:
-    #         junc_extended_start = sorted(previous_exons, key=lambda x: x[0], reverse=False)[0][0]
-    #     else:
-    #         junc_extended_start = junc_start
-    #     if next_exons:
-    #         junc_extended_end = sorted(next_exons, key=lambda x: x[1], reverse=True)[0][1]
-    #     else:
-    #         junc_extended_end = junc_end
-    #     junctions_extended[(junc_start, junc_end)] = (junc_extended_start, junc_extended_end)
-
-    # Remove exons with count less than min_count
     exons = {k: v for k, v in exons.items() if v >= min_count}
-
     # Create a graph
     G = nx.Graph()
-
     # Add nodes for each junction
     for junction in junctions.keys():
         G.add_node((junction[0], junction[1], "junction"))  # "junction = (intron_start, intron_end)"
-
     # Add nodes for each exon
     for exon in exons.keys():
         G.add_node((exon[0] - 1, exon[1] + 1, "exon"))  # "exon = (exon_start-1, exon_end+1)"
-
     # Add edges between overlapping junctions (sharing start or end positions)
     junction_list = [(junction[0], junction[1], "junction") for junction in list(junctions.keys())]
     # need to connected exon and junction, but exon and junction have one base difference
@@ -333,7 +217,6 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
         for j in range(i + 1, len(merged_list)):
             start1, end1, type1 = merged_list[i]
             start2, end2, type2 = merged_list[j]
-
             # Check if they share a start or end position
             if type1 == type2:
                 # junction-junction or exon-exon should share the donor or acceptor site
@@ -343,11 +226,7 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
                 # junction-exon or exon-junction should connect to each other
                 if start1 == end2 or end1 == start2:
                     G.add_edge(merged_list[i], merged_list[j])
-
-    # Find connected components
     connected_components = list(nx.connected_components(G))
-
-    # Collect the clusters of junctions
     for component in connected_components:
         clu = []
         for node in component:
@@ -355,7 +234,6 @@ def cluster_junctions_exons_connected_components(reads_junctions, reads_exons, m
                 clu.append((node[0], node[1]))
         if len(clu) > 0:
             junctions_clusters.append(clu)
-
     return junctions_clusters, junctions
 
 
@@ -403,18 +281,17 @@ class AseEvent:
         self.p_value = p_value
         self.sor = sor
         self.novel = novel
-        self.gene_names = [gene_name]
+        self.gene_name = gene_name
 
     @staticmethod
     def __header__():
         return ("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_absent\tHap1_present\tHap2_absent\tHap2_present\t"
-                "P_value\tSOR\tNovel\tGene_names")
+                "P_value\tSOR\tNovel\tGene_name")
 
     def __str__(self):
-        gene_names = ",".join(set(self.gene_names))
         return (f"{self.chr}:{self.start}-{self.end}\t{self.strand}\t{self.junction_set}\t{self.phase_set}\t"
                 f"{self.hap1_absent}\t{self.hap1_present}\t{self.hap2_absent}\t{self.hap2_present}\t"
-                f"{self.p_value}\t{self.sor}\t{self.novel}\t{gene_names}")
+                f"{self.p_value}\t{self.sor}\t{self.novel}\t{self.gene_name}")
 
 
 def calc_sor(hap1_absent, hap1_present, hap2_absent, hap2_present):
@@ -444,21 +321,17 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags):
         phase_set = reads_tags[read_name]["PS"]
         hap_present_counts[phase_set][hap] += 1
     all_phase_sets = set(hap_absent_counts.keys()).union(set(hap_present_counts.keys()))
-
     # get the ps with the most reads
-    ps_read_count = {ps: sum(hap_absent_counts[ps].values()) + sum(hap_present_counts[ps].values()) for ps in
-                     all_phase_sets}
+    ps_read_count = {}
+    for ps in all_phase_sets:
+        h1_a, h2_a = hap_absent_counts[ps][1], hap_absent_counts[ps][2]
+        h1_p, h2_p = hap_present_counts[ps][1], hap_present_counts[ps][2]
+        ps_read_count[ps] = h1_a + h2_a + h1_p + h2_p
     if ps_read_count:
-        most_reads_ps = sorted(ps_read_count, key=ps_read_count.get, reverse=True)[0]
+        most_reads_ps = sorted(ps_read_count.items(), key=lambda x: x[1], reverse=True)[0][0]
     else:
         return None
-
     phase_set = most_reads_ps
-    # take phased reads without phase set into account
-    hap_absent_counts[phase_set][1] = hap_absent_counts[phase_set].get(1, 0)
-    hap_absent_counts[phase_set][2] = hap_absent_counts[phase_set].get(2, 0)
-    hap_present_counts[phase_set][1] = hap_present_counts[phase_set].get(1, 0)
-    hap_present_counts[phase_set][2] = hap_present_counts[phase_set].get(2, 0)
     table = np.array([[hap_absent_counts[phase_set][1], hap_absent_counts[phase_set][2]],
                       [hap_present_counts[phase_set][1], hap_present_counts[phase_set][2]]])
     ## Fisher's exact test
@@ -561,91 +434,70 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             #                                           reads_introns)
             absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
             test_result = haplotype_event_test(absences, presents, reads_tags)
-            if test_result:
-                (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = test_result
-                gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
-                                                junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
+            if test_result is None:
+                continue
+            (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = test_result
+            gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
+                                            junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
     return gene_ase_events
 
 
 def analyze(annotation_file, bam_file, output_prefix, min_count, gene_types, threads):
-    all_ase_events = {}  # key: (chr, start, end), value: AseEvent
+    all_ase_events = {}  # key: (chr, start, end), value: {gene_name: AseEvent}
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
         annotation_file, gene_types)
-
-    # Prepare data for multiprocessing
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
                        anno_intron_regions[gene_id], gene_region, bam_file, min_count)
                       for gene_id, gene_region in anno_gene_regions.items()]
-
-    # Use ProcessPoolExecutor for multiprocessing
     with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
-        # Submit tasks and collect futures
         futures = [executor.submit(analyze_gene, *gene_data) for gene_data in gene_data_list]
-
-        # As each future completes, collect the results
         for future in concurrent.futures.as_completed(futures):
             gene_ase_events = future.result()
             for event in gene_ase_events:
                 # multiple junctions in one gene_ase_events
-                if (event.chr, event.start, event.end) in all_ase_events.keys():
-                    # same junction choose the one with higher p-value
-                    tmp_event = all_ase_events[(event.chr, event.start, event.end)]
-                    if event.p_value < tmp_event.p_value:
-                        tmp_event.p_value = event.p_value
-                        tmp_event.sor = event.sor
-                        tmp_event.hap1_absent = event.hap1_absent
-                        tmp_event.hap1_present = event.hap1_present
-                        tmp_event.hap2_absent = event.hap2_absent
-                        tmp_event.hap2_present = event.hap2_present
-                        tmp_event.phase_set = event.phase_set
-                    tmp_event.gene_names.extend(event.gene_names)
-                    if not event.novel:
-                        tmp_event.novel = event.novel
+                key = (event.chr, event.start, event.end)
+                if key in all_ase_events.keys():
+                    all_ase_events[key][event.gene_name] = event
                 else:
-                    all_ase_events[(event.chr, event.start, event.end)] = event
+                    all_ase_events[key] = {event.gene_name: event}
 
-    # apply Benjamini–Hochberg correction for all junctions with enough reads\
-    pass_idx = []
+    # apply Benjamini–Hochberg correction for all junctions with enough reads
+    pass_idx = []  # index of junctions
     p_values = []
-    junctions = list(all_ase_events.keys())
+    junctions = []
+    for key in all_ase_events.keys():
+        for gname in all_ase_events[key].keys():
+            junctions.append((key, gname))  # key: (chr, start, end), gname: gene name
+    print(f"Total junctions: {len(junctions)}")
     for idx in range(len(junctions)):
-        event = all_ase_events[junctions[idx]]
+        junc = junctions[idx][0]
+        gname = junctions[idx][1]
+        event = all_ase_events[junc][gname]
         if event.hap1_absent + event.hap1_present + event.hap2_absent + event.hap2_present >= min_count:
             pass_idx.append(idx)
             p_values.append(event.p_value)
+    print(f"number of junctions with at least {min_count} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     asj_genes = {}
     with open(output_prefix + ".diff_splice.tsv", "w") as f:
         f.write(AseEvent.__header__() + "\n")
         for pi in range(len(pass_idx)):
-            idx = pass_idx[pi]
-            event = all_ase_events[junctions[idx]]
+            junc = junctions[pass_idx[pi]][0]
+            gname = junctions[pass_idx[pi]][1]
+            event = all_ase_events[junc][gname]
             event.p_value = adjusted_p_values[pi]
             f.write(event.__str__() + "\n")
-
-            for gene_name in event.gene_names:
-                if gene_name not in asj_genes:
-                    asj_genes[gene_name] = [event.chr, event.p_value, event.sor]
-                else:
-                    if event.p_value < asj_genes[gene_name][1]:
-                        asj_genes[gene_name] = [event.chr, event.p_value, event.sor]
-            # if reject[pi]:
-            #     event = all_ase_events[junctions[idx]]
-            #     event.p_value = adjusted_p_values[pi]
-            #     f.write(event.__str__() + "\n")
-            #
-            #     for gene_name in event.gene_names:
-            #         if gene_name not in asj_genes:
-            #             asj_genes[gene_name] = [event.chr, event.p_value, event.sor]
-            #         else:
-            #             if event.p_value < asj_genes[gene_name][1]:
-            #                 asj_genes[gene_name] = [event.chr, event.p_value, event.sor]
-
+            if gname not in asj_genes:
+                asj_genes[gname] = [event.chr, event.p_value, event.sor]
+            else:
+                if event.p_value < asj_genes[gname][1]:
+                    asj_genes[gname] = [event.chr, event.p_value, event.sor]
+    print(f"number of genes with allele-specific junctions: {len(asj_genes.keys())}")
     with open(output_prefix + ".asj_gene.tsv", "w") as f:
         f.write(f"#Gene_name\tChr\tP_value\tSOR\n")
         for gene_name in asj_genes:
-            f.write(f"{gene_name}\t{asj_genes[gene_name][0]}\t{asj_genes[gene_name][1]}\t{asj_genes[gene_name][2]}\n")
+            chr, pvalue, sor = asj_genes[gene_name]
+            f.write(f"{gene_name}\t{chr}\t{pvalue}\t{sor}\n")
 
 
 if __name__ == "__main__":
