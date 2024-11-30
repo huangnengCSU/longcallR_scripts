@@ -5,10 +5,57 @@ import gzip
 from intervaltree import Interval, IntervalTree
 from multiprocessing import Manager
 import concurrent.futures
-from scipy.stats import binomtest
+from scipy.stats import binomtest, betabinom
 from statsmodels.stats.multitest import multipletests
 import argparse
-import time
+
+def convert_mu_rho_to_alpha_beta(mu, rho):
+    """
+    Convert mean (mu) and overdispersion (rho) to alpha and beta parameters.
+    """
+    phi = (1 - rho) / rho - 1  # Dispersion parameter
+    alpha = mu * phi
+    beta = (1 - mu) * phi
+    return alpha, beta
+
+
+def beta_binomial_p_value(k_obs, n, mu, rho, alternative="two-sided"):
+    """
+    Calculate the p-value for a Beta-Binomial test using scipy.stats.betabinom.
+
+    Parameters:
+        k_obs (int): Observed reference allele count.
+        n (int): Total read count (k_ref + k_alt).
+        mu (float): Mean parameter (expected success proportion, e.g., 0.5).
+        rho (float): Overdispersion parameter.
+        alternative (str): 'two-sided', 'greater', or 'less'.
+
+    Returns:
+        float: P-value for the hypothesis test.
+    """
+    # Convert mu and rho to alpha and beta
+    alpha, beta_param = convert_mu_rho_to_alpha_beta(mu, rho)
+
+    # Initialize the Beta-Binomial distribution
+    bb = betabinom(n, alpha, beta_param)
+
+    # Observed PMF (probability of observing k_obs)
+    p_obs = bb.pmf(k_obs)
+
+    if alternative == "two-sided":
+        # Two-sided test: Sum probabilities for all outcomes with P <= P(k_obs)
+        pmf_values = [bb.pmf(k) for k in range(n + 1)]
+        p_value = sum(p for p in pmf_values if p <= p_obs)
+    elif alternative == "greater":
+        # One-sided (greater): Sum probabilities for k >= k_obs
+        p_value = bb.sf(k_obs - 1)  # sf = 1 - cdf
+    elif alternative == "less":
+        # One-sided (less): Sum probabilities for k <= k_obs
+        p_value = bb.cdf(k_obs)
+    else:
+        raise ValueError("Invalid alternative hypothesis. Choose from 'two-sided', 'greater', 'less'.")
+
+    return p_value
 
 
 def get_gene_regions(annotation_file, gene_types):
@@ -345,7 +392,7 @@ def get_reads_tag(bam_file, chr, start_pos, end_pos):
     return reads_tag
 
 
-def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, gene_assigned_reads):
+def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, overdispersion, gene_assigned_reads):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     assigned_reads = set(gene_assigned_reads[gene_id])
     phase_set_hap_count = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {haplotype: count}
@@ -366,11 +413,13 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
     hap_count = phase_set_hap_count[most_reads_ps]
     if hap_count[1] + hap_count[2] < min_count:
         return (gene_name, gene_region["chr"], 1.0, most_reads_ps, 0, 0)
-    p_value_ase = binomtest(hap_count[1], hap_count[1] + hap_count[2], 0.5, alternative='two-sided').pvalue
+    # p_value_ase = binomtest(hap_count[1], hap_count[1] + hap_count[2], 0.5, alternative='two-sided').pvalue
+    p_value_ase = beta_binomial_p_value(hap_count[1], hap_count[1] + hap_count[2], 0.5, overdispersion,
+                                        alternative='two-sided')
     return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, hap_count[1], hap_count[2])
 
 
-def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_count,
+def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_count, overdispersion,
                                  gene_assigned_reads, rna_vcfs, wg_vcfs):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     assigned_reads = set(gene_assigned_reads[gene_id])
@@ -393,7 +442,9 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
     h1_count, h2_count = hap_count[1], hap_count[2]
     if h1_count + h2_count < min_count:
         return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0, 0, 0)
-    p_value_ase = binomtest(h1_count, h1_count + h2_count, 0.5, alternative='two-sided').pvalue
+    # p_value_ase = binomtest(h1_count, h1_count + h2_count, 0.5, alternative='two-sided').pvalue
+    p_value_ase = beta_binomial_p_value(hap_count[1], hap_count[1] + hap_count[2], 0.5, overdispersion,
+                                        alternative='two-sided')
 
     # determine paternal and maternal alleles for H1 and H2
     ps_variants = rna_vcfs.get(most_reads_ps, [])
@@ -443,12 +494,12 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
             h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
 
 
-def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, min_support):
+def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, min_support, overdispersion):
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
     read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
-    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
+    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support, overdispersion)
                  for gene_id in gene_regions.keys() if gene_id in gene_assigned_reads]
     results = []
     with Manager() as manager:
@@ -477,14 +528,14 @@ def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, 
 
 
 def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, out_file, threads, gene_types,
-                              min_support):
+                              min_support, overdispersion):
     rna_vcfs = load_longcallR_phased_vcf(vcf_file1)
     wg_vcfs = load_whole_genome_phased_vcf(vcf_file2)
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
     read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
-    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
+    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support, overdispersion)
                  for gene_id in gene_regions.keys() if gene_id in gene_assigned_reads]
     results = []
     with Manager() as manager:
@@ -521,6 +572,7 @@ if __name__ == "__main__":
     parser.add_argument("--vcf1", required=False, help="longcallR phased vcf file", default=None)
     parser.add_argument("--vcf2", required=False, help="whole genome haplotype phased vcf file", default=None)
     parser.add_argument("-a", "--annotation", required=True, help="Annotation file")
+    parser.add_argument("-d", "--overdispersion", type=float, default=0.001, help="Overdispersion parameter")
     parser.add_argument("-o", "--output", required=True, help="prefix of output file")
     parser.add_argument("-p", "--processes", type=int, default=1, help="Number of process to run")
     parser.add_argument("--gene_types", type=str, nargs="+", default=["protein_coding", "lncRNA"],
@@ -534,7 +586,7 @@ if __name__ == "__main__":
 
     if args.vcf1 and args.vcf2:
         analyze_ase_genes_pat_mat(args.annotation, args.bam, args.vcf1, args.vcf2, args.output + ".patmat.ase.tsv",
-                                  args.processes, gene_types, args.min_support)
+                                  args.processes, gene_types, args.min_support, args.overdispersion)
     else:
         analyze_ase_genes(args.annotation, args.bam, args.output + ".ase.tsv", args.processes, gene_types,
-                          args.min_support)
+                          args.min_support, args.overdispersion)
