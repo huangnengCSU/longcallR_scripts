@@ -5,11 +5,59 @@ import gzip
 from intervaltree import Interval, IntervalTree
 from multiprocessing import Manager
 import concurrent.futures
-from scipy.stats import binomtest
+from scipy.stats import binomtest, fisher_exact, chi2_contingency, betabinom
 from statsmodels.stats.multitest import multipletests
 import argparse
 import csv
-import time
+
+
+def convert_mu_rho_to_alpha_beta(mu, rho):
+    """
+    Convert mean (mu) and overdispersion (rho) to alpha and beta parameters.
+    """
+    phi = (1 - rho) / rho - 1  # Dispersion parameter
+    alpha = mu * phi
+    beta = (1 - mu) * phi
+    return alpha, beta
+
+
+def beta_binomial_p_value(k_obs, n, mu, rho, alternative="two-sided"):
+    """
+    Calculate the p-value for a Beta-Binomial test using scipy.stats.betabinom.
+
+    Parameters:
+        k_obs (int): Observed reference allele count.
+        n (int): Total read count (k_ref + k_alt).
+        mu (float): Mean parameter (expected success proportion, e.g., 0.5).
+        rho (float): Overdispersion parameter.
+        alternative (str): 'two-sided', 'greater', or 'less'.
+
+    Returns:
+        float: P-value for the hypothesis test.
+    """
+    # Convert mu and rho to alpha and beta
+    alpha, beta_param = convert_mu_rho_to_alpha_beta(mu, rho)
+
+    # Initialize the Beta-Binomial distribution
+    bb = betabinom(n, alpha, beta_param)
+
+    # Observed PMF (probability of observing k_obs)
+    p_obs = bb.pmf(k_obs)
+
+    if alternative == "two-sided":
+        # Two-sided test: Sum probabilities for all outcomes with P <= P(k_obs)
+        pmf_values = [bb.pmf(k) for k in range(n + 1)]
+        p_value = sum(p for p in pmf_values if p <= p_obs)
+    elif alternative == "greater":
+        # One-sided (greater): Sum probabilities for k >= k_obs
+        p_value = bb.sf(k_obs - 1)  # sf = 1 - cdf
+    elif alternative == "less":
+        # One-sided (less): Sum probabilities for k <= k_obs
+        p_value = bb.cdf(k_obs)
+    else:
+        raise ValueError("Invalid alternative hypothesis. Choose from 'two-sided', 'greater', 'less'.")
+
+    return p_value
 
 
 def get_tissue_readnames(tissue_readnames):
@@ -355,7 +403,7 @@ def get_reads_tag(bam_file, chr, start_pos, end_pos):
     return reads_tag
 
 
-def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, gene_assigned_reads,
+def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, overdispersion, gene_assigned_reads,
                          tissue_readname_map):
     reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
     # assigned_reads = set()
@@ -390,7 +438,8 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
         return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
     # Binomial test p-value
     total_reads = hap1_cnt + hap2_cnt
-    p_value_ase = binomtest(hap1_cnt, total_reads, 0.5, alternative='two-sided').pvalue
+    # p_value_ase = binomtest(hap1_cnt, total_reads, 0.5, alternative='two-sided').pvalue
+    p_value_ase = beta_binomial_p_value(hap1_cnt, total_reads, 0.5, overdispersion, alternative='two-sided')
     tissue_count = defaultdict(lambda: defaultdict(int))
     for rname in ps_hp_read_names[most_reads_ps][1]:
         tissue = tissue_readname_map[rname]
@@ -400,28 +449,44 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, g
         tissue_count[2][tissue] += 1
     h1_tissue_str = []
     h2_tissue_str = []
+    h1_tissues = []
+    h2_tissues = []
     all_tissues = set(list(tissue_count[1].keys()) + list(tissue_count[2].keys()))
     for tissue in all_tissues:
         if tissue not in tissue_count[1]:
             tissue_count[1][tissue] = 0
         h1_tissue_str.append(f"{tissue}:{tissue_count[1][tissue]}")
+        h1_tissues.append(tissue_count[1][tissue] + 1)  # pseudo count
         if tissue not in tissue_count[2]:
             tissue_count[2][tissue] = 0
         h2_tissue_str.append(f"{tissue}:{tissue_count[2][tissue]}")
+        h2_tissues.append(tissue_count[2][tissue] + 1)  # pseudo count
     h1_tissue_str = ",".join(h1_tissue_str)
     h2_tissue_str = ",".join(h2_tissue_str)
-    return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, hap1_cnt, hap2_cnt,
+    # fisher_exact test / chi-square test
+    if len(all_tissues) == 1:
+        # binomial test
+        p_value_tsase = p_value_ase
+    elif len(all_tissues) == 2:
+        # fisher_exact test
+        _, p_value_tsase = fisher_exact([h1_tissues, h2_tissues])
+    else:
+        # chi-square test
+        _, p_value_tsase, _, _ = chi2_contingency([h1_tissues, h2_tissues])
+
+    return (gene_name, gene_region["chr"], p_value_ase, p_value_tsase, most_reads_ps, hap1_cnt, hap2_cnt,
             h1_tissue_str, h2_tissue_str)
 
 
-def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, threads, gene_types, min_support):
+def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, threads, gene_types, min_support,
+                      overdispersion):
     tissue_readname_map = get_tissue_readnames(tissue_readnames)
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
     read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
     gene_assigned_reads = transform_read_assignment(read_assignment)
 
-    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support)
+    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support, overdispersion)
                  for gene_id in gene_regions.keys()
                  if gene_id in gene_assigned_reads]
     results = []
@@ -439,19 +504,21 @@ def analyze_ase_genes(annotation_file, bam_file, tissue_readnames, out_file, thr
     pass_idx = []
     p_values = []
     print(f"total number of genes: {len(results)}")
-    for idx, (gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str) in enumerate(results):
+    for idx, (gene_name, chrom, p_value_ase, p_value_tsase, ps, h1, h2, h1_tissue_str, h2_tissue_str) in enumerate(
+            results):
         if h1 + h2 >= min_support:
             pass_idx.append(idx)
-            p_values.append(p_value)
+            p_values.append(p_value_ase)
     print(f"number of genes with at least {min_support} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
-        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_tissues\tH2_tissues\n")
+        f.write("Gene\tChr\tPS\tH1\tH2\tP-value-ASE\tP-value-TSASE\tH1_tissues\tH2_tissues\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
-            gene_name, chrom, p_value, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
-            p_value = adjusted_p_values[pi]
-            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_tissue_str}\t{h2_tissue_str}\n")
+            gene_name, chrom, p_value_ase, p_value_tsase, ps, h1, h2, h1_tissue_str, h2_tissue_str = results[idx]
+            p_value_ase = adjusted_p_values[pi]
+            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value_ase}\t{p_value_tsase}\t"
+                    f"{h1_tissue_str}\t{h2_tissue_str}\n")
 
 
 if __name__ == "__main__":
@@ -460,6 +527,8 @@ if __name__ == "__main__":
     parser.add_argument("-r", "--tissue_readnames", required=True,
                         help="File stores tissue name of each read in tsv format, read_name\ttissue_name")
     parser.add_argument("-a", "--annotation", required=True, help="Annotation file")
+    parser.add_argument("-d", "--overdispersion", type=float, default=0.001,
+                        help="Overdispersion parameter for beta-binomial test (default: 0.005)")
     parser.add_argument("-o", "--output", required=True, help="prefix of output file")
     parser.add_argument("-p", "--processes", type=int, default=1, help="Number of process to run")
     parser.add_argument("--gene_types", type=str, nargs="+", default=["protein_coding", "lncRNA"],
@@ -472,4 +541,4 @@ if __name__ == "__main__":
     gene_types = set(args.gene_types)
 
     analyze_ase_genes(args.annotation, args.bam, args.tissue_readnames, args.output + ".joint_ase.tsv", args.processes,
-                      gene_types, args.min_support)
+                      gene_types, args.min_support, args.overdispersion)
