@@ -48,14 +48,22 @@ def get_gene_regions(annotation_file, gene_types):
         exon_regions[gene_id][transcript_id].append((chr, start, end))  # 1-based, start-inclusive, end-inclusive
 
     def parse_attributes_gff3(attributes):
-        return {key_value.split("=")[0]: key_value.split("=")[1] for key_value in attributes.split(";")}
+        attr_dict = {}
+        for attr in attributes.strip().split(";"):
+            key, value = attr.strip().split("=")
+            attr_dict[key] = value.replace('"', '')
+        return attr_dict
 
     def parse_attributes_gtf(attributes):
         attr_dict = {}
         for attr in attributes.strip().split(";"):
             if attr:
                 key, value = attr.strip().split(" ")
-                attr_dict[key] = value.replace('"', '')
+                if key == "tag":
+                    attr_dict[key] = attr_dict.get(key, []) + [value.replace('"', '')]
+                else:
+                    attr_dict[key] = value.replace('"', '')
+        attr_dict["tag"] = ",".join(attr_dict.get("tag", []))
         return attr_dict
 
     def parse_file(file_handle, file_type):
@@ -74,17 +82,19 @@ def get_gene_regions(annotation_file, gene_types):
             if feature_type == "gene":
                 gene_id = attr_dict["gene_id"]
                 gene_type = attr_dict["gene_type"]
+                tag = attr_dict.get("tag", "")
                 try:
                     gene_name = attr_dict["gene_name"]
                 except KeyError:
                     gene_name = "."  # Use a placeholder if gene name is not available
-                if gene_type in gene_types:
+                if gene_type in gene_types and "readthrough" not in tag:
                     process_gene(parts, gene_id, gene_name)
             elif feature_type == "exon":
                 gene_type = attr_dict["gene_type"]
                 transcript_id = attr_dict["transcript_id"]
                 gene_id = attr_dict["gene_id"]
-                if gene_type in gene_types:
+                tag = attr_dict.get("tag", "")
+                if gene_type in gene_types and "readthrough" not in tag:
                     process_exon(parts, gene_id, transcript_id)
 
     open_func = gzip.open if annotation_file.endswith(".gz") else open
