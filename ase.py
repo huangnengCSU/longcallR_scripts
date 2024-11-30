@@ -84,7 +84,6 @@ def get_gene_regions(annotation_file, gene_types):
         exon_regions[gene_id][transcript_id].append((chr, start, end))  # 1-based, start-inclusive, end-inclusive
 
     def parse_attributes_gff3(attributes):
-        # return {key_value.split("=")[0]: key_value.split("=")[1] for key_value in attributes.split(";")}
         attr_dict = {}
         for attr in attributes.strip().split(";"):
             key, value = attr.strip().split("=")
