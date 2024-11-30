@@ -431,11 +431,11 @@ def calculate_ase_pvalue(bam_file, gene_id, gene_name, gene_region, min_count, o
     if ps_read_cnt:
         most_reads_ps = sorted(ps_read_cnt.items(), key=lambda x: x[1], reverse=True)[0][0]
     else:
-        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
+        return (gene_name, gene_region["chr"], 1.0, 1.0, ".", 0, 0, 0, 0)
     hap_count = phase_set_hap_count[most_reads_ps]
     hap1_cnt, hap2_cnt = hap_count[1], hap_count[2]
     if hap1_cnt + hap2_cnt < min_count:
-        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0, 0, 0)
+        return (gene_name, gene_region["chr"], 1.0, 1.0, ".", 0, 0, 0, 0)
     # Binomial test p-value
     total_reads = hap1_cnt + hap2_cnt
     # p_value_ase = binomtest(hap1_cnt, total_reads, 0.5, alternative='two-sided').pvalue
