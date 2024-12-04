@@ -312,6 +312,34 @@ def calc_sor(hap1_absent, hap1_present, hap2_absent, hap2_present):
     return SOR
 
 
+def g_test_2x2(table, pseudocount=1e-10):
+    """
+    Perform a G-test on a 2x2 contingency table.
+    Parameters:
+        table (numpy.ndarray): A 2x2 contingency table.
+        pseudocount (float): Small value to avoid log(0) errors for cells with zero counts.
+    Returns:
+        g_stat (float): The G-test statistic.
+        p_value (float): The p-value for the test.
+    """
+
+    table = np.array(table)
+    # Compute totals
+    row_totals = table.sum(axis=1)
+    col_totals = table.sum(axis=0)
+    grand_total = table.sum()
+    # Calculate expected frequencies
+    expected = np.outer(row_totals, col_totals) / grand_total
+    # Add pseudocount to avoid log(0)
+    observed = table + pseudocount
+    expected += pseudocount
+    # Compute the G-statistic
+    G = 2 * np.sum(observed * np.log(observed / expected))
+    df = 1  # degrees of freedom
+    p_value = 1 - chi2.cdf(G, df)
+    return G, p_value
+
+
 def haplotype_event_test(absent_reads, present_reads, reads_tags):
     """
     Perform Fisher's exact test to determine if the haplotype distribution is significantly different between absent and present reads.
@@ -347,8 +375,9 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags):
     ## Fisher's exact test
     oddsratio, pvalue_fisher = fisher_exact(table)
     ## G-test
-    g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-300, lambda_="log-likelihood")
-    pvalue_gtest = np.min(pvalue_gtest)
+    # g_stat, pvalue_gtest = power_divergence(f_obs=table + 1e-300, lambda_="log-likelihood")
+    # pvalue_gtest = np.min(pvalue_gtest)
+    g_stat, pvalue_gtest = g_test_2x2(table)
     ## Use the maximum p-value from Fisher's exact test and G-test
     pvalue = max(pvalue_fisher, pvalue_gtest)
     ## Calculate SOR, refer to GATK AS_StrandOddsRatio, https://gatk.broadinstitute.org/hc/en-us/articles/360037224532-AS-StrandOddsRatio
