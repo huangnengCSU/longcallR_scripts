@@ -406,7 +406,7 @@ def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
 
 class AseEvent:
     def __init__(self, chr, start, end, novel, gene_name, strand, junction_set, phase_set, hap1_absent, hap1_present,
-                 hap2_absent, hap2_present, h1_tissues_str, h2_tissues_str, p_value, p_value_ts):
+                 hap2_absent, hap2_present, h1_tissues_str, h2_tissues_str, p_value, p_value_tsase, p_value_ts):
         self.chr = chr
         self.start = start  # 1-based, inclusive
         self.end = end  # 1-based, inclusive
@@ -420,6 +420,7 @@ class AseEvent:
         self.h1_tissues = h1_tissues_str
         self.h2_tissues = h2_tissues_str
         self.p_value = p_value
+        self.p_value_tsase = p_value_tsase
         self.p_value_ts = p_value_ts
         self.novel = novel
         self.gene_name = gene_name
@@ -427,12 +428,12 @@ class AseEvent:
     @staticmethod
     def __header__():
         return ("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_tissues\tHap2_tissues\t"
-                "P_value\tP_value_ts\tNovel\tGene_name")
+                "P_value\tP_value_tsase\tP_value_ts\tNovel\tGene_name")
 
     def __str__(self):
         return (f"{self.chr}:{self.start}-{self.end}\t{self.strand}\t{self.junction_set}\t{self.phase_set}\t"
-                f"{self.h1_tissues}\t{self.h2_tissues}\t{self.p_value}\t{self.p_value_ts}\t{self.novel}\t"
-                f"{self.gene_name}")
+                f"{self.h1_tissues}\t{self.h2_tissues}\t{self.p_value}\t{self.p_value_tsase}\t{self.p_value_ts}"
+                f"\t{self.novel}\t{self.gene_name}")
 
 
 def calc_sor(hap1_absent, hap1_present, hap2_absent, hap2_present):
@@ -511,6 +512,7 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
     table = [[v + 1 for v in h1_cnts], [v + 1 for v in h2_cnts]]  # 2 x 2n table
     _, p_value, _, _ = chi2_contingency(table)
 
+    # Tissue-specific allele-specific junction
     table2 = [[], [], [], []]
     for i in range(len(h1_cnts)):
         if i % 2 == 0:
@@ -522,7 +524,14 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
             table2[2].append(h2_cnts[i] + 1)  # h2 tissue absent
         else:
             table2[3].append(h2_cnts[i] + 1)  # h2 tissue present
-    _, p_value_ts, _, _ = chi2_contingency(table2)  # 4 x n table test
+    _, p_value_tsase, _, _ = chi2_contingency(table2)  # 4 x n table test
+
+    # Tissue-specific junction
+    table3 = [[], []]  # 2 x n table
+    for tissue in tissues:
+        table3[0].append(h1_count_table[tissue]["absent"] + h2_count_table[tissue]["absent"] + 1)  # absent
+        table3[1].append(h1_count_table[tissue]["present"] + h2_count_table[tissue]["present"] + 1)  # present
+    _, p_value_ts, _, _ = chi2_contingency(table3)  # 2 x n table test
 
     h1_tissue_str = []
     h2_tissue_str = []
@@ -531,7 +540,7 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags, tissue_readnam
         h2_tissue_str.append(f'{tissue}:{h2_count_table[tissue]["absent"]}:{h2_count_table[tissue]["present"]}')
     h1_tissue_str = ",".join(h1_tissue_str)
     h2_tissue_str = ",".join(h2_tissue_str)
-    event = (phase_set, p_value, p_value_ts, h1_tissue_str, h2_tissue_str,
+    event = (phase_set, p_value, p_value_tsase, p_value_ts, h1_tissue_str, h2_tissue_str,
              len(hap_absent_counts[phase_set][1]), len(hap_present_counts[phase_set][1]),
              len(hap_absent_counts[phase_set][2]), len(hap_present_counts[phase_set][2]))
     return event
@@ -597,11 +606,11 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             test_result = haplotype_event_test(absences, presents, reads_tags, tissue_readname_map)
             if test_result is None:
                 continue
-            (phase_set, pvalue, pvalue_ts, h1_tissue_str, h2_tissue_str, h1_absent, h1_present, h2_absent,
+            (phase_set, pvalue, pvalue_tsase, pvalue_ts, h1_tissue_str, h2_tissue_str, h1_absent, h1_present, h2_absent,
              h2_present) = test_result
             gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gene_name, gene_strand,
                                             junction_set, phase_set, h1_absent, h1_present, h2_absent, h2_present,
-                                            h1_tissue_str, h2_tissue_str, pvalue, pvalue_ts))
+                                            h1_tissue_str, h2_tissue_str, pvalue, pvalue_tsase, pvalue_ts))
     return gene_ase_events
 
 
@@ -655,16 +664,18 @@ def analyze(annotation_file, bam_file, tissue_readnames, output_prefix, min_coun
             event.p_value = adjusted_p_values[pi]
             f.write(event.__str__() + "\n")
             if gname not in asj_genes:
-                asj_genes[gname] = [event.chr, event.p_value, event.p_value_ts, event.h1_tissues, event.h2_tissues]
+                asj_genes[gname] = [event.chr, event.p_value, event.p_value_tsase, event.p_value_ts, event.h1_tissues,
+                                    event.h2_tissues]
             else:
                 if event.p_value < asj_genes[gname][1]:
-                    asj_genes[gname] = [event.chr, event.p_value, event.p_value_ts, event.h1_tissues, event.h2_tissues]
+                    asj_genes[gname] = [event.chr, event.p_value, event.p_value_tsase, event.p_value_ts,
+                                        event.h1_tissues, event.h2_tissues]
     print(f"number of genes with allele-specific junctions: {len(asj_genes.keys())}")
     with open(output_prefix + ".joint_asj_gene.tsv", "w") as f:
-        f.write(f"#Gene_name\tChr\tP_value\tP_value_ts\tHap1_tissues\tHap2_tissues\n")
+        f.write(f"#Gene_name\tChr\tP_value\tP_value_tsase\tP_value_ts\tHap1_tissues\tHap2_tissues\n")
         for gene_name in asj_genes:
-            chr, p_value, p_value_ts, h1_tissues, h2_tissues = asj_genes[gene_name]
-            f.write(f"{gene_name}\t{chr}\t{p_value}\t{p_value_ts}\t{h1_tissues}\t{h2_tissues}\n")
+            chr, p_value, p_value_tsase, p_value_ts, h1_tissues, h2_tissues = asj_genes[gene_name]
+            f.write(f"{gene_name}\t{chr}\t{p_value}\t{p_value_tsase}\t{p_value_ts}\t{h1_tissues}\t{h2_tissues}\n")
 
 
 if __name__ == "__main__":
