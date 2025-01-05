@@ -8,7 +8,7 @@ usage() {
 
 # Initialize variables
 bam_file=""
-depth_file="all_chr_depth.tsv"
+depth_file=""
 reference_file=""
 high_confidence_bed_file=""
 annotation_file=""
@@ -51,6 +51,7 @@ fi
 
 # Generate depth file if not provided
 if [ ! -f "$depth_file" ]; then
+    depth_file="$output_dir/all_chr_depth.tsv"
     samtools depth -a -d 100000 "$bam_file" --reference "$reference_file" > "$depth_file"
 fi
 
