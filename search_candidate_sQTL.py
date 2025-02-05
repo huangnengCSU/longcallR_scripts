@@ -68,19 +68,21 @@ def binary_search_snp(query_position, variants_list):
     return variants_list[left] if left_dist < right_dist else variants_list[right]
 
 
-def find_candidate_sQTL(vcf_file, ase_event_file, output_file, sQTL_dist_threshold):
+def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pvalue_threshold):
     variants = load_all_variants(vcf_file)
     fout = open(output_file, "w")
     fout.write("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_absent\tHap1_present\tHap2_absent\tHap2_present"
                "\tP_value\tSOR\tNovel\tGene_names\tsQTL\tDistance\tRef\tAlt\n")
     junctions_events = defaultdict(list)
-    with open(ase_event_file) as f:
+    with open(asj_file) as f:
         for line in f:
             if line.startswith("#"):
                 continue
             parts = line.strip().split("\t")
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
              sor, novel, gene_names) = parts
+            if float(pvalue) > pvalue_threshold:
+                continue
             junctions_events[junction_set].append((junction, strand, junction_set, phase_set, hap1_absent, hap1_present,
                                                    hap2_absent, hap2_present, pvalue, sor, novel, gene_names))
     for junction_set in junctions_events.keys():
@@ -126,8 +128,9 @@ def find_candidate_sQTL(vcf_file, ase_event_file, output_file, sQTL_dist_thresho
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Search for candidate sQTLs.")
     parser.add_argument("-v", "--vcf", type=str, required=True, help="DNA/RNA VCF file")
-    parser.add_argument("-a", "--ase", type=str, required=True, help="ASE event file")
+    parser.add_argument("-a", "--asj", type=str, required=True, help="allele-specific junction file")
     parser.add_argument("-o", "--output", type=str, required=True, help="Output file")
     parser.add_argument("-d", "--distance", type=int, default=4, help="sQTL distance threshold")
+    parser.add_argument("-p", "--pvalue", type=float, default=0.05, help="p-value threshold for allele specific junction")
     args = parser.parse_args()
-    find_candidate_sQTL(args.vcf, args.ase, args.output, args.distance)
+    find_candidate_sQTL(args.vcf, args.asj, args.output, args.distance, args.pvalue)
