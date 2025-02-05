@@ -81,7 +81,7 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
             parts = line.strip().split("\t")
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
              sor, novel, gene_names) = parts
-            if float(pvalue) > pvalue_threshold:
+            if float(pvalue) >= pvalue_threshold:
                 continue
             junctions_events[junction_set].append((junction, strand, junction_set, phase_set, hap1_absent, hap1_present,
                                                    hap2_absent, hap2_present, pvalue, sor, novel, gene_names))
