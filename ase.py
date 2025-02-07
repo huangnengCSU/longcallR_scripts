@@ -377,10 +377,34 @@ def load_whole_genome_phased_vcf(vcf_file):
     return wg_vcfs
 
 
-def load_longcallR_phased_vcf(vcf_file):
+def load_dna_vcf(vcf_file):
+    """
+    Load DNA VCF file.
+    :param vcf_file:
+    :return: dna_vcfs: key is chr:pos, value is directory{genotype, ref, alt}
+    """
+    dna_vcfs = {}
+    with pysam.VariantFile(vcf_file) as vcf:
+        for record in vcf.fetch():
+            gt = record.samples[0]['GT']
+            # Skip indels by checking if any alternate allele differs in length from the reference allele
+            if any(len(record.ref) != len(alt) for alt in record.alts):
+                continue
+            # Check for heterozygous variants (0/1 or 1/0 or 0|1 or 1|0)
+            if gt in [(0, 1), (1, 0)]:
+                ref_allele = record.ref
+                alt_allele = record.alts[0]
+                dna_vcfs[f"{record.contig}:{record.pos}"] = {"gt": gt,
+                                                             "ref": ref_allele,
+                                                             "alt": alt_allele}
+    return dna_vcfs
+
+
+def load_longcallR_phased_vcf(vcf_file, with_dp_af = False):
     """
     get the longcallR phased vcf
     :param vcf_file:
+    :param with_dp_af: whether to include depth and allele fraction
     :return: rna_vcfs: key is ps, value is variants
     """
     import pysam
@@ -396,7 +420,10 @@ def load_longcallR_phased_vcf(vcf_file):
             if gt in [(0, 1), (1, 0)] and record.samples[0].phased:
                 ps = record.samples[0].get('PS', None)
                 if ps:
-                    rna_vcfs[ps].append(f"{record.contig}:{record.pos}")  # 1-based
+                    if with_dp_af:
+                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}:{record.samples[0]['DP']}:{record.samples[0]['AF'][0]}") # 1-based, ctg:pos:dp:af
+                    else:
+                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}")  # 1-based, ctg:pos
     return rna_vcfs
 
 
@@ -512,6 +539,50 @@ def calculate_ase_pvalue_pat_mat(bam_file, gene_id, gene_name, gene_region, min_
             h1_count, h2_count, h1_pat_cnt, h1_mat_cnt, h2_pat_cnt, h2_mat_cnt)
 
 
+def calculate_ase_pvalue_filtering(bam_file, gene_id, gene_name, gene_region, min_count, overdispersion,
+                                 gene_assigned_reads, rna_vcfs, dna_vcfs):
+    reads_tag = get_reads_tag(bam_file, gene_region["chr"], gene_region["start"], gene_region["end"])
+    assigned_reads = set(gene_assigned_reads[gene_id])
+    phase_set_hap_count = defaultdict(lambda: {1: 0, 2: 0})  # key: phase set, value: {haplotype: count}
+    for rname in assigned_reads:
+        if rname in reads_tag:
+            ps = reads_tag[rname]["PS"]
+            hp = reads_tag[rname]["HP"]
+            if ps and hp:
+                phase_set_hap_count[ps][hp] += 1
+    # get the ps with the most reads
+    ps_read_cnt = {}
+    for ps, hap_cnt in phase_set_hap_count.items():
+        ps_read_cnt[ps] = hap_cnt[1] + hap_cnt[2]
+    if ps_read_cnt:
+        most_reads_ps = sorted(ps_read_cnt.items(), key=lambda x: x[1], reverse=True)[0][0]
+    else:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0)
+    hap_count = phase_set_hap_count[most_reads_ps]
+    h1_count, h2_count = hap_count[1], hap_count[2]
+    if h1_count + h2_count < min_count:
+        return (gene_name, gene_region["chr"], 1.0, most_reads_ps, 0, 0)
+    # p_value_ase = binomtest(h1_count, h1_count + h2_count, 0.5, alternative='two-sided').pvalue
+    p_value_ase = beta_binomial_p_value(hap_count[1], hap_count[1] + hap_count[2], 0.5, overdispersion,
+                                        alternative='two-sided')
+
+    # filtering if all RNA heterozygous variants are not in DNA VCF
+    overlapped_cnt = 0
+    ps_variants = rna_vcfs.get(most_reads_ps, [])
+    for snp in ps_variants:
+        ctg_pos = snp.split(":")[0] + ":" + snp.split(":")[1]
+        if ctg_pos in dna_vcfs:
+            depth = int(snp.split(":")[2])
+            allele_fraction = float(snp.split(":")[3])
+            alt_cnt = int(depth * allele_fraction)
+            p_value_ase_allele = beta_binomial_p_value(alt_cnt, depth, 0.5, overdispersion, alternative='two-sided')
+            if depth >= min_count and p_value_ase_allele < 0.05:
+                overlapped_cnt += 1
+    if overlapped_cnt == 0:
+        return (gene_name, gene_region["chr"], 1.0, ".", 0, 0)
+    return (gene_name, gene_region["chr"], p_value_ase, most_reads_ps, hap_count[1], hap_count[2])
+
+
 def analyze_ase_genes(annotation_file, bam_file, out_file, threads, gene_types, min_support, overdispersion):
     gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
     merged_genes_exons = merge_gene_exon_regions(exon_regions)
@@ -584,11 +655,51 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
             f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\t{h1_pat}\t{h1_mat}\t{h2_pat}\t{h2_mat}\n")
 
 
+def analyze_ase_genes_with_filtering(annotation_file, bam_file, vcf_file1, vcf_file3, out_file, threads, gene_types,
+                              min_support, overdispersion):
+    rna_vcfs = load_longcallR_phased_vcf(vcf_file1, with_dp_af=True)
+    dna_vcfs = load_dna_vcf(vcf_file3)
+    gene_regions, gene_names, gene_strands, exon_regions, intron_regions = get_gene_regions(annotation_file, gene_types)
+    merged_genes_exons = merge_gene_exon_regions(exon_regions)
+    read_assignment = assign_reads_to_gene_parallel(bam_file, merged_genes_exons, threads)
+    gene_assigned_reads = transform_read_assignment(read_assignment)
+    gene_args = [(bam_file, gene_id, gene_names[gene_id], gene_regions[gene_id], min_support, overdispersion)
+                 for gene_id in gene_regions.keys() if gene_id in gene_assigned_reads]
+    results = []
+    with Manager() as manager:
+        shared_assignments = manager.dict(gene_assigned_reads)
+        shared_rna_vcfs = manager.dict(rna_vcfs)
+        shared_dna_vcfs = manager.dict(dna_vcfs)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
+            futures = [executor.submit(calculate_ase_pvalue_filtering, *gene_data, shared_assignments, shared_rna_vcfs,
+                                       shared_dna_vcfs) for gene_data in gene_args]
+            for future in concurrent.futures.as_completed(futures):
+                results.append(future.result())
+    # apply Benjamini–Hochberg correction for all genes with at least min_support reads
+    pass_idx = []
+    p_values = []
+    print(f"total number of genes: {len(results)}")
+    for idx, (gene_name, chrom, p_value, ps, h1, h2) in enumerate(results):
+        if h1 + h2 >= min_support:
+            pass_idx.append(idx)
+            p_values.append(p_value)
+    print(f"number of genes with at least {min_support} reads: {len(pass_idx)}")
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    with open(out_file, "w") as f:
+        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\n")
+        for pi in range(len(pass_idx)):
+            idx = pass_idx[pi]
+            gene_name, chrom, p_value, ps, h1, h2 = results[idx]
+            p_value = adjusted_p_values[pi]
+            f.write(f"{gene_name}\t{chrom}\t{ps}\t{h1}\t{h2}\t{p_value}\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-b", "--bam", required=True, help="phased BAM file")
-    parser.add_argument("--vcf1", required=False, help="longcallR phased vcf file", default=None)
-    parser.add_argument("--vcf2", required=False, help="whole genome haplotype phased vcf file", default=None)
+    parser.add_argument("--vcf1", required=False, help="LongcallR phased vcf file", default=None)
+    parser.add_argument("--vcf2", required=False, help="Whole genome haplotype phased DNA vcf file", default=None)
+    parser.add_argument("--vcf3", required=False, help="DNA vcf file", default=None)
     parser.add_argument("-a", "--annotation", required=True, help="Annotation file")
     parser.add_argument("-d", "--overdispersion", type=float, default=0.001, help="Overdispersion parameter")
     parser.add_argument("-o", "--output", required=True, help="prefix of output file")
@@ -604,6 +715,9 @@ if __name__ == "__main__":
 
     if args.vcf1 and args.vcf2:
         analyze_ase_genes_pat_mat(args.annotation, args.bam, args.vcf1, args.vcf2, args.output + ".patmat.ase.tsv",
+                                  args.processes, gene_types, args.min_support, args.overdispersion)
+    elif args.vcf1 and args.vcf3:
+        analyze_ase_genes_with_filtering(args.annotation, args.bam, args.vcf1, args.vcf3, args.output + ".filtered.ase.tsv",
                                   args.processes, gene_types, args.min_support, args.overdispersion)
     else:
         analyze_ase_genes(args.annotation, args.bam, args.output + ".ase.tsv", args.processes, gene_types,
