@@ -412,6 +412,8 @@ def load_longcallR_phased_vcf(vcf_file, with_dp_af = False):
     rna_vcfs = defaultdict(list)  # key is ps, value is positions
     with pysam.VariantFile(vcf_file) as vcf:
         for record in vcf.fetch():
+            if 'PASS' not in record.filter.keys():
+                continue
             gt = record.samples[0]['GT']
             # Skip indels by checking if any alternate allele differs in length from the reference allele
             if any(len(record.ref) != len(alt) for alt in record.alts):
@@ -419,9 +421,13 @@ def load_longcallR_phased_vcf(vcf_file, with_dp_af = False):
             # Check for only phased heterozygous variants (0|1 or 1|0)
             if gt in [(0, 1), (1, 0)] and record.samples[0].phased:
                 ps = record.samples[0].get('PS', None)
-                if ps:
+                if ps and ps!=".":
                     if with_dp_af:
-                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}:{record.samples[0]['DP']}:{record.samples[0]['AF'][0]}") # 1-based, ctg:pos:dp:af
+                        dp = record.samples[0]['DP']
+                        af = record.samples[0]['AF'][0]
+                        if math.isnan(af) or math.isnan(dp) or dp == 0:
+                            continue
+                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}:{dp}:{af}") # 1-based, ctg:pos:dp:af
                     else:
                         rna_vcfs[ps].append(f"{record.contig}:{record.pos}")  # 1-based, ctg:pos
     return rna_vcfs
