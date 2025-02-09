@@ -68,7 +68,7 @@ def binary_search_snp(query_position, variants_list):
     return variants_list[left] if left_dist < right_dist else variants_list[right]
 
 
-def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pvalue_threshold):
+def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pvalue_threshold, sor_threshold):
     variants = load_all_variants(vcf_file)
     fout = open(output_file, "w")
     fout.write("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_absent\tHap1_present\tHap2_absent\tHap2_present"
@@ -81,7 +81,7 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
             parts = line.strip().split("\t")
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
              sor, novel, gene_names) = parts
-            if float(pvalue) >= pvalue_threshold:
+            if float(pvalue) >= pvalue_threshold or float(sor) < sor_threshold:
                 continue
             junctions_events[junction_set].append((junction, strand, junction_set, phase_set, hap1_absent, hap1_present,
                                                    hap2_absent, hap2_present, pvalue, sor, novel, gene_names))
@@ -132,5 +132,6 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output", type=str, required=True, help="Output file")
     parser.add_argument("-d", "--distance", type=int, default=4, help="sQTL distance threshold")
     parser.add_argument("-p", "--pvalue", type=float, default=0.05, help="p-value threshold for allele specific junction")
+    parser.add_argument("-s", "--sor", type=float, default=2.0, help="SOR threshold for allele specific junction")
     args = parser.parse_args()
-    find_candidate_sQTL(args.vcf, args.asj, args.output, args.distance, args.pvalue)
+    find_candidate_sQTL(args.vcf, args.asj, args.output, args.distance, args.pvalue, args.sor)
