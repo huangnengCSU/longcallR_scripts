@@ -748,6 +748,8 @@ def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count,
             event = all_ase_events[junc][gname]
             event.p_value = adjusted_p_values[pi]
             f.write(event.__str__() + "\n")
+            if not no_gtag and not event.gt_ag_tag:
+                continue
             if gname not in asj_genes:
                 asj_genes[gname] = [event.chr, event.p_value, event.sor]
             else:
