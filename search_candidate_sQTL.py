@@ -72,7 +72,7 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
     variants = load_all_variants(vcf_file)
     fout = open(output_file, "w")
     fout.write("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_absent\tHap1_present\tHap2_absent\tHap2_present"
-               "\tP_value\tSOR\tNovel\tGene_names\tsQTL\tDistance\tRef\tAlt\n")
+               "\tP_value\tSOR\tNovel\tGT_AG\tGene_names\tsQTL\tDistance\tRef\tAlt\n")
     junctions_events = defaultdict(list)
     with open(asj_file) as f:
         for line in f:
@@ -80,16 +80,16 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
                 continue
             parts = line.strip().split("\t")
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
-             sor, novel, gene_names) = parts
+             sor, novel, gt_ag_tag, gene_names) = parts
             if float(pvalue) >= pvalue_threshold or float(sor) < sor_threshold:
                 continue
             junctions_events[junction_set].append((junction, strand, junction_set, phase_set, hap1_absent, hap1_present,
-                                                   hap2_absent, hap2_present, pvalue, sor, novel, gene_names))
+                                                   hap2_absent, hap2_present, pvalue, sor, novel, gt_ag_tag, gene_names))
     for junction_set in junctions_events.keys():
         sqtl_candidates = {}  # key: sQTL, value: (pvalue, sor)
         for event in junctions_events[junction_set]:
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
-             sor, novel, gene_names) = event
+             sor, novel, gt_ag_tag, gene_names) = event
             chr = junction.split(":")[0]
             start_pos, end_pos = map(int, junction.split(":")[1].split("-"))
             if len(variants[chr]) == 0:
@@ -110,7 +110,7 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
         best_variant = sqtl_candidates[0][0]
         for event in junctions_events[junction_set]:
             (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
-             sor, novel, gene_names) = event
+             sor, novel, gt_ag_tag, gene_names) = event
             start_pos, end_pos = map(int, junction.split(":")[1].split("-"))
             left_distance = start_pos - best_variant.pos  # Exon>0, Intron<=0
             right_distance = best_variant.pos - end_pos  # Exon>0, Intron<=0
@@ -119,7 +119,7 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
             else:
                 distance = right_distance
             fout.write(f"{junction}\t{strand}\t{junction_set}\t{phase_set}\t{hap1_absent}\t{hap1_present}\t"
-                       f"{hap2_absent}\t{hap2_present}\t{pvalue}\t{sor}\t{novel}\t{gene_names}\t"
+                       f"{hap2_absent}\t{hap2_present}\t{pvalue}\t{sor}\t{novel}\t{gt_ag_tag}\t{gene_names}\t"
                        f"{best_variant.chr}:{best_variant.pos}\t{distance}\t{best_variant.ref_allele}\t"
                        f"{best_variant.alt_allele}\n")
     fout.close()
