@@ -17,8 +17,8 @@ def load_all_variants(vcf_file):
     all_variants = defaultdict(list)
     with pysam.VariantFile(vcf_file) as vcf:
         for record in vcf:
-            if record.filter.keys() != ['PASS']:
-                continue
+            # if record.filter.keys() != ['PASS']:
+            #     continue
             is_indel = any(len(allele) != len(record.ref) for allele in record.alleles)
             if is_indel:
                 continue
@@ -125,6 +125,45 @@ def find_candidate_sQTL(vcf_file, asj_file, output_file, sQTL_dist_threshold, pv
     fout.close()
 
 
+def find_candidate_sQTL2(vcf_file, asj_file, output_file):
+    # Find closest surrounding DNA variant for each junction
+    variants = load_all_variants(vcf_file)
+    fout = open(output_file, "w")
+    fout.write("#Junction\tStrand\tJunction_set\tPhase_set\tHap1_absent\tHap1_present\tHap2_absent\tHap2_present"
+               "\tP_value\tSOR\tNovel\tGT_AG\tGene_names\tsQTL\tDistance\tRef\tAlt\n")
+    junctions_events = defaultdict(list)
+    with open(asj_file) as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            parts = line.strip().split("\t")
+            (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
+             sor, novel, gt_ag_tag, gene_names) = parts
+            junctions_events[junction_set].append((junction, strand, junction_set, phase_set, hap1_absent, hap1_present,
+                                                   hap2_absent, hap2_present, pvalue, sor, novel, gt_ag_tag, gene_names))
+    for junction_set in junctions_events.keys():
+        for event in junctions_events[junction_set]:
+            (junction, strand, junction_set, phase_set, hap1_absent, hap1_present, hap2_absent, hap2_present, pvalue,
+             sor, novel, gt_ag_tag, gene_names) = event
+            chr = junction.split(":")[0]
+            start_pos, end_pos = map(int, junction.split(":")[1].split("-"))
+            if len(variants[chr]) == 0:
+                continue
+            variant_s = binary_search_snp(start_pos, variants[chr])
+            variant_e = binary_search_snp(end_pos, variants[chr])
+            if abs(variant_s.pos - start_pos) < abs(variant_e.pos - end_pos):
+                hit_variant = variant_s
+                distance = abs(variant_s.pos - start_pos)
+            else:
+                hit_variant = variant_e
+                distance = abs(variant_e.pos - end_pos)
+            fout.write(f"{junction}\t{strand}\t{junction_set}\t{phase_set}\t{hap1_absent}\t{hap1_present}\t"
+                       f"{hap2_absent}\t{hap2_present}\t{pvalue}\t{sor}\t{novel}\t{gt_ag_tag}\t{gene_names}\t"
+                       f"{hit_variant.chr}:{hit_variant.pos}\t{distance}\t{hit_variant.ref_allele}\t"
+                       f"{hit_variant.alt_allele}\n")
+    fout.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Search for candidate sQTLs.")
     parser.add_argument("-v", "--vcf", type=str, required=True, help="DNA/RNA VCF file")
@@ -134,4 +173,5 @@ if __name__ == "__main__":
     parser.add_argument("-p", "--pvalue", type=float, default=0.05, help="p-value threshold for allele specific junction")
     parser.add_argument("-s", "--sor", type=float, default=2.0, help="SOR threshold for allele specific junction")
     args = parser.parse_args()
-    find_candidate_sQTL(args.vcf, args.asj, args.output, args.distance, args.pvalue, args.sor)
+    # find_candidate_sQTL(args.vcf, args.asj, args.output, args.distance, args.pvalue, args.sor)
+    find_candidate_sQTL2(args.vcf, args.asj, args.output)
