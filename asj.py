@@ -699,6 +699,15 @@ def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count,
                                                                                             no_gtag)
     print(f"Reads assigned to genes in {time.time() - start_time:.2f} seconds")
     gene_assigned_reads = transform_read_assignment(read_assignment)
+    with open(output_prefix + ".gene_coverage.tsv", "w") as f:
+        f.write("#Gene_name\tChr\tStart\tEnd\tNum_reads\n")
+        for gene_id, gene_region in anno_gene_regions.items():
+            if gene_id not in gene_assigned_reads:
+                gene_coverage = 0
+            else:
+                gene_coverage = len(gene_assigned_reads[gene_id])
+            f.write(f"{anno_gene_names[gene_id]}\t{gene_region['chr']}\t{gene_region['start']}\t"
+                    f"{gene_region['end']}\t{gene_coverage}\n")
     gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
                        anno_intron_regions[gene_id], gene_region,
                        {name: reads_positions[name] for name in gene_assigned_reads[gene_id]},
