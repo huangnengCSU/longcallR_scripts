@@ -749,7 +749,7 @@ def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count,
     print(f"number of junctions with at least {min_count} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     asj_genes = {}
-    with open(output_prefix + ".diff_splice.tsv", "w") as f:
+    with open(output_prefix + ".asj.tsv", "w") as f:
         f.write(AseEvent.__header__() + "\n")
         for pi in range(len(pass_idx)):
             junc = junctions[pass_idx[pi]][0]

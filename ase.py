@@ -720,10 +720,10 @@ if __name__ == "__main__":
     gene_types = set(args.gene_types)
 
     if args.vcf1 and args.vcf2:
-        analyze_ase_genes_pat_mat(args.annotation, args.bam, args.vcf1, args.vcf2, args.output + ".patmat.ase.tsv",
+        analyze_ase_genes_pat_mat(args.annotation, args.bam, args.vcf1, args.vcf2, args.output + ".patmat_ase.tsv",
                                   args.processes, gene_types, args.min_support, args.overdispersion)
     elif args.vcf1 and args.vcf3:
-        analyze_ase_genes_with_filtering(args.annotation, args.bam, args.vcf1, args.vcf3, args.output + ".filtered.ase.tsv",
+        analyze_ase_genes_with_filtering(args.annotation, args.bam, args.vcf1, args.vcf3, args.output + ".filter_ase.tsv",
                                   args.processes, gene_types, args.min_support, args.overdispersion)
     else:
         analyze_ase_genes(args.annotation, args.bam, args.output + ".ase.tsv", args.processes, gene_types,
