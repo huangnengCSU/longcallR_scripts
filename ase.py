@@ -653,7 +653,7 @@ def analyze_ase_genes_pat_mat(annotation_file, bam_file, vcf_file1, vcf_file2, o
     print(f"number of genes with at least {min_support} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
-        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
+        f.write("#Gene_name\tChr\tPS\tH1\tH2\tP_value\tH1_Paternal\tH1_Maternal\tH2_Paternal\tH2_Maternal\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
             gene_name, chrom, p_value, ps, h1, h2, h1_pat, h1_mat, h2_pat, h2_mat = results[idx]
@@ -692,7 +692,7 @@ def analyze_ase_genes_with_filtering(annotation_file, bam_file, vcf_file1, vcf_f
     print(f"number of genes with at least {min_support} reads: {len(pass_idx)}")
     reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
     with open(out_file, "w") as f:
-        f.write("Gene\tChr\tPS\tH1\tH2\tP-value\n")
+        f.write("#Gene_name\tChr\tPS\tH1\tH2\tP_value\n")
         for pi in range(len(pass_idx)):
             idx = pass_idx[pi]
             gene_name, chrom, p_value, ps, h1, h2 = results[idx]
