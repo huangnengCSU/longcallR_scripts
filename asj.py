@@ -467,6 +467,61 @@ def check_absent_present(start_pos, end_pos, reads_positions, reads_junctions):
             absent_reads.append(read_name)
     return absent_reads, present_reads
 
+def load_dna_vcf(vcf_file):
+    """
+    Load DNA VCF file.
+    :param vcf_file:
+    :return: dna_vcfs: key is chr:pos, value is directory{genotype, ref, alt}
+    """
+    dna_vcfs = {}
+    with pysam.VariantFile(vcf_file) as vcf:
+        for record in vcf.fetch():
+            gt = record.samples[0]['GT']
+            # Skip indels by checking if any alternate allele differs in length from the reference allele
+            if any(len(record.ref) != len(alt) for alt in record.alts):
+                continue
+            # Check for heterozygous variants (0/1 or 1/0 or 0|1 or 1|0)
+            if gt in [(0, 1), (1, 0)]:
+                ref_allele = record.ref
+                alt_allele = record.alts[0]
+                dna_vcfs[f"{record.contig}:{record.pos}"] = {"gt": gt,
+                                                             "ref": ref_allele,
+                                                             "alt": alt_allele}
+    return dna_vcfs
+
+
+def load_longcallR_phased_vcf(vcf_file, with_dp_af = False):
+    """
+    get the longcallR phased vcf
+    :param vcf_file:
+    :param with_dp_af: whether to include depth and allele fraction
+    :return: rna_vcfs: key is ps, value is variants
+    """
+    import pysam
+    from collections import defaultdict
+    rna_vcfs = defaultdict(list)  # key is ps, value is positions
+    with pysam.VariantFile(vcf_file) as vcf:
+        for record in vcf.fetch():
+            if 'PASS' not in record.filter.keys():
+                continue
+            gt = record.samples[0]['GT']
+            # Skip indels by checking if any alternate allele differs in length from the reference allele
+            if any(len(record.ref) != len(alt) for alt in record.alts):
+                continue
+            # Check for only phased heterozygous variants (0|1 or 1|0)
+            if gt in [(0, 1), (1, 0)] and record.samples[0].phased:
+                ps = record.samples[0].get('PS', None)
+                if ps and ps!=".":
+                    if with_dp_af:
+                        dp = record.samples[0]['DP']
+                        af = record.samples[0]['AF'][0]
+                        if math.isnan(af) or math.isnan(dp) or dp == 0:
+                            continue
+                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}:{dp}:{af}") # 1-based, ctg:pos:dp:af
+                    else:
+                        rna_vcfs[ps].append(f"{record.contig}:{record.pos}")  # 1-based, ctg:pos
+    return rna_vcfs
+
 
 class AseEvent:
     def __init__(self, chr, start, end, novel, gt_ag_tag, gene_name, strand, junction_set, phase_set,
@@ -609,8 +664,15 @@ def haplotype_event_test(absent_reads, present_reads, reads_tags):
     # return events
 
 
-def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region,
-                 reads_positions, reads_tags, reads_exons, reads_introns, min_count):
+def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region, gene_reads, min_count):
+    global reads_positions, reads_tags, reads_exons, reads_introns
+    # Subset reads for this gene
+    sub_reads_positions = {name: reads_positions[name] for name in gene_reads}
+    sub_reads_tags = {name: reads_tags[name] for name in gene_reads}
+    sub_reads_exons = {name: reads_exons[name] for name in gene_reads}
+    sub_reads_introns = {name: reads_introns[name] for name in gene_reads}
+
+
     chr = gene_region["chr"]
     start = gene_region["start"]
     end = gene_region["end"]
@@ -623,13 +685,15 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         for anno_exon in anno_exons:
             gene_exon_set.add(anno_exon)
 
+    print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
+
     # # Extract relevant reads and regions
     # reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file,
     #                                                                                      gene_assigned_reads[gene_id],
     #                                                                                      chr, start, end,
     #                                                                                      ref_seq, no_gtag)
     # junctions_clusters, read_junctions = cluster_junctions_connected_components(reads_introns, min_count)
-    junctions_clusters, read_junctions = cluster_junctions_exons_connected_components(reads_introns, reads_exons,
+    junctions_clusters, read_junctions = cluster_junctions_exons_connected_components(sub_reads_introns, sub_reads_exons,
                                                                                       min_count)
 
     # filter reads which have no overlapped exons with current gene exons
@@ -639,7 +703,7 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         intervalt.addi(exon_start, exon_end + 1)  # interval is half-open, left inclusive, right exclusive
 
     reads_to_remove = []
-    for qname, read_exons in reads_exons.items():
+    for qname, read_exons in sub_reads_exons.items():
         overlapped = False
         for (exon_start, exon_end) in read_exons:
             if bool(intervalt.overlap(exon_start, exon_end + 1)):
@@ -650,10 +714,10 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
 
     # Remove reads after collecting them
     for qname in reads_to_remove:
-        del reads_positions[qname]
-        del reads_exons[qname]
-        del reads_introns[qname]
-        del reads_tags[qname]
+        del sub_reads_positions[qname]
+        del sub_reads_exons[qname]
+        del sub_reads_introns[qname]
+        del sub_reads_tags[qname]
 
     gene_ase_events = []  # each gene may have multiple allele-specific junctions
 
@@ -670,8 +734,8 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
             # (extended_junction_start, extended_junction_end) = junctions_extended[(junction_start, junction_end)]
             # absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
             #                                           reads_introns)
-            absences, presents = check_absent_present(junction_start, junction_end, reads_positions, reads_introns)
-            test_result = haplotype_event_test(absences, presents, reads_tags)
+            absences, presents = check_absent_present(junction_start, junction_end, sub_reads_positions, sub_reads_introns)
+            test_result = haplotype_event_test(absences, presents, sub_reads_tags)
             if test_result is None:
                 continue
             (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = test_result
@@ -680,7 +744,109 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
     return gene_ase_events
 
 
+def analyze_gene_with_filtering(gene_name, gene_strand, annotation_exons, annotation_junctions, gene_region, gene_reads, min_count):
+    global reads_positions, reads_tags, reads_exons, reads_introns, dna_vcfs, rna_vcfs
+    # Subset reads for this gene
+    sub_reads_positions = {name: reads_positions[name] for name in gene_reads}
+    sub_reads_tags = {name: reads_tags[name] for name in gene_reads}
+    sub_reads_exons = {name: reads_exons[name] for name in gene_reads}
+    sub_reads_introns = {name: reads_introns[name] for name in gene_reads}
+
+    chr = gene_region["chr"]
+    start = gene_region["start"]
+    end = gene_region["end"]
+    gene_junction_set = set()
+    for transcript_id, anno_junctions in annotation_junctions.items():
+        for anno_junc in anno_junctions:
+            gene_junction_set.add(anno_junc)
+    gene_exon_set = set()
+    for transcript_id, anno_exons in annotation_exons.items():
+        for anno_exon in anno_exons:
+            gene_exon_set.add(anno_exon)
+
+    print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
+
+    # # Extract relevant reads and regions
+    # reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file,
+    #                                                                                      gene_assigned_reads[gene_id],
+    #                                                                                      chr, start, end,
+    #                                                                                      ref_seq, no_gtag)
+    # junctions_clusters, read_junctions = cluster_junctions_connected_components(reads_introns, min_count)
+    junctions_clusters, read_junctions = cluster_junctions_exons_connected_components(sub_reads_introns, sub_reads_exons,
+                                                                                      min_count)
+
+    # filter reads which have no overlapped exons with current gene exons
+    intervalt = IntervalTree()
+    for anno_exon in gene_exon_set:
+        exon_start, exon_end = anno_exon[1:3]
+        intervalt.addi(exon_start, exon_end + 1)  # interval is half-open, left inclusive, right exclusive
+
+    reads_to_remove = []
+
+    # filter reads not phased by any DNA variants
+    for qname in sub_reads_tags.keys():
+        phase_set = sub_reads_tags[qname]["PS"]
+        ps_variants = rna_vcfs.get(phase_set, [])
+        overlapped_snps_cnt = 0
+        for snp in ps_variants:
+            ctg_pos = snp.split(":")[0] + ":" + snp.split(":")[1]
+            if ctg_pos in dna_vcfs:
+                overlapped_snps_cnt += 1
+        if overlapped_snps_cnt == 0:
+            reads_to_remove.append(qname)
+
+    for qname, read_exons in sub_reads_exons.items():
+        overlapped = False
+        for (exon_start, exon_end) in read_exons:
+            if bool(intervalt.overlap(exon_start, exon_end + 1)):
+                overlapped = True
+                break
+        if not overlapped:
+            reads_to_remove.append(qname)
+
+    # Remove reads after collecting them
+    for qname in set(reads_to_remove):
+        del sub_reads_positions[qname]
+        del sub_reads_exons[qname]
+        del sub_reads_introns[qname]
+        del sub_reads_tags[qname]
+
+    gene_ase_events = []  # each gene may have multiple allele-specific junctions
+
+    # Analyze junction regions
+    for junc_cluster in junctions_clusters:
+        if len(junc_cluster) == 0:
+            continue
+        junction_set = f"{chr}:{junc_cluster[0][0]}-{junc_cluster[0][1]}"
+        for read_junc in junc_cluster:
+            junction_start = read_junc[0]
+            junction_end = read_junc[1]
+            gt_ag_tag = read_junc[2]
+            novel = (chr, junction_start, junction_end) not in gene_junction_set
+            # (extended_junction_start, extended_junction_end) = junctions_extended[(junction_start, junction_end)]
+            # absences, presents = check_absent_present(extended_junction_start, extended_junction_end, reads_positions,
+            #                                           reads_introns)
+            absences, presents = check_absent_present(junction_start, junction_end, sub_reads_positions, sub_reads_introns)
+            test_result = haplotype_event_test(absences, presents, sub_reads_tags)
+            if test_result is None:
+                continue
+            (phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor) = test_result
+            gene_ase_events.append(AseEvent(chr, junction_start, junction_end, novel, gt_ag_tag, gene_name, gene_strand,
+                                            junction_set, phase_set, h1_a, h1_p, h2_a, h2_p, pvalue, sor))
+    return gene_ase_events
+
+
+# --- Global variables for large dicts ---
+reads_positions = None
+reads_tags = None
+reads_exons = None
+reads_introns = None
+dna_vcfs = None
+rna_vcfs = None
+
 def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count, gene_types, threads, no_gtag):
+    global reads_positions, reads_tags, reads_exons, reads_introns, dna_vcfs, rna_vcfs
+
     all_ase_events = {}  # key: (chr, start, end), value: {gene_name: AseEvent}
     start_time = time.time()
     anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
@@ -692,13 +858,20 @@ def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count,
     for chrom in ref_genome.references:
         genome_dict[chrom] = ref_genome.fetch(chrom)
     start_time = time.time()
-    read_assignment, reads_positions, reads_tags, reads_exons, reads_junctions = load_reads(bam_file,
+    read_assignment, reads_positions_local, reads_tags_local, reads_exons_local, reads_introns_local = load_reads(bam_file,
                                                                                             genome_dict,
                                                                                             merged_genes_exons,
                                                                                             threads,
                                                                                             no_gtag)
     print(f"Reads assigned to genes in {time.time() - start_time:.2f} seconds")
     gene_assigned_reads = transform_read_assignment(read_assignment)
+
+    # Set globals ONCE
+    reads_positions = reads_positions_local
+    reads_tags = reads_tags_local
+    reads_exons = reads_exons_local
+    reads_introns = reads_introns_local
+
     with open(output_prefix + ".gene_coverage.tsv", "w") as f:
         f.write("#Gene_name\tChr\tStart\tEnd\tNum_reads\n")
         for gene_id, gene_region in anno_gene_regions.items():
@@ -708,18 +881,126 @@ def analyze(annotation_file, bam_file, reference_file, output_prefix, min_count,
                 gene_coverage = len(gene_assigned_reads[gene_id])
             f.write(f"{anno_gene_names[gene_id]}\t{gene_region['chr']}\t{gene_region['start']}\t"
                     f"{gene_region['end']}\t{gene_coverage}\n")
-    gene_data_list = [(anno_gene_names[gene_id], anno_gene_strands[gene_id], anno_exon_regions[gene_id],
-                       anno_intron_regions[gene_id], gene_region,
-                       {name: reads_positions[name] for name in gene_assigned_reads[gene_id]},
-                       {name: reads_tags[name] for name in gene_assigned_reads[gene_id]},
-                       {name: reads_exons[name] for name in gene_assigned_reads[gene_id]},
-                       {name: reads_junctions[name] for name in gene_assigned_reads[gene_id]},
-                       min_count) for gene_id, gene_region in anno_gene_regions.items() if
-                      (gene_region["chr"] in genome_dict) and (len(gene_assigned_reads[gene_id]) > 0)]
+
+    gene_data_list = []
+    for gene_id, gene_region in anno_gene_regions.items():
+        if (gene_region["chr"] in genome_dict) and (len(gene_assigned_reads[gene_id]) > 0):
+            gene_name = anno_gene_names[gene_id]
+            gene_strand = anno_gene_strands[gene_id]
+            gene_anno_exons = anno_exon_regions[gene_id]
+            gene_anno_introns = anno_intron_regions[gene_id]
+            gene_reads = gene_assigned_reads[gene_id]
+            gene_data_list.append(
+                (gene_name, gene_strand, gene_anno_exons, gene_anno_introns, gene_region, gene_reads, min_count))
+
     print(f"Total genes to be analyzed: {len(gene_data_list)}")
     start_time = time.time()
     with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
         futures = [executor.submit(analyze_gene, *gene_data) for gene_data in gene_data_list]
+        for future in concurrent.futures.as_completed(futures):
+            gene_ase_events = future.result()
+            for event in gene_ase_events:
+                # multiple junctions in one gene_ase_events
+                key = (event.chr, event.start, event.end)
+                if key in all_ase_events.keys():
+                    all_ase_events[key][event.gene_name] = event
+                else:
+                    all_ase_events[key] = {event.gene_name: event}
+    print(f"All Gene processed completed in {time.time() - start_time:.2f} seconds")
+
+    # apply Benjamini–Hochberg correction for all junctions with enough reads
+    pass_idx = []  # index of junctions
+    p_values = []
+    junctions = []
+    for key in all_ase_events.keys():
+        for gname in all_ase_events[key].keys():
+            junctions.append((key, gname))  # key: (chr, start, end), gname: gene name
+    print(f"Total junctions: {len(junctions)}")
+    for idx in range(len(junctions)):
+        junc = junctions[idx][0]
+        gname = junctions[idx][1]
+        event = all_ase_events[junc][gname]
+        if event.hap1_absent + event.hap1_present + event.hap2_absent + event.hap2_present >= min_count:
+            pass_idx.append(idx)
+            p_values.append(event.p_value)
+    print(f"number of junctions with at least {min_count} reads: {len(pass_idx)}")
+    reject, adjusted_p_values, _, _ = multipletests(p_values, alpha=0.05, method='fdr_bh')
+    asj_genes = {}
+    with open(output_prefix + ".asj.tsv", "w") as f:
+        f.write(AseEvent.__header__() + "\n")
+        for pi in range(len(pass_idx)):
+            junc = junctions[pass_idx[pi]][0]
+            gname = junctions[pass_idx[pi]][1]
+            event = all_ase_events[junc][gname]
+            event.p_value = adjusted_p_values[pi]
+            f.write(event.__str__() + "\n")
+            if not no_gtag and not event.gt_ag_tag:
+                continue
+            if gname not in asj_genes:
+                asj_genes[gname] = [event.chr, event.p_value, event.sor]
+            else:
+                if event.p_value < asj_genes[gname][1]:
+                    asj_genes[gname] = [event.chr, event.p_value, event.sor]
+    print(f"number of genes with allele-specific junctions: {len(asj_genes.keys())}")
+    with open(output_prefix + ".asj_gene.tsv", "w") as f:
+        f.write(f"#Gene_name\tChr\tP_value\tSOR\n")
+        for gene_name in asj_genes:
+            chr, pvalue, sor = asj_genes[gene_name]
+            f.write(f"{gene_name}\t{chr}\t{pvalue}\t{sor}\n")
+
+def analyze_with_filtering(annotation_file, bam_file, reference_file, output_prefix, min_count, gene_types, threads, no_gtag, dna_vcfs_in, rna_vcfs_in):
+    global reads_positions, reads_tags, reads_exons, reads_introns, dna_vcfs, rna_vcfs
+
+    all_ase_events = {}  # key: (chr, start, end), value: {gene_name: AseEvent}
+    start_time = time.time()
+    anno_gene_regions, anno_gene_names, anno_gene_strands, anno_exon_regions, anno_intron_regions = get_gene_regions(
+        annotation_file, gene_types)
+    print(f"Annotation file parsed in {time.time() - start_time:.2f} seconds")
+    merged_genes_exons = merge_gene_exon_regions(anno_exon_regions)
+    genome_dict = {}
+    ref_genome = pysam.FastaFile(reference_file)
+    for chrom in ref_genome.references:
+        genome_dict[chrom] = ref_genome.fetch(chrom)
+    start_time = time.time()
+    read_assignment, reads_positions_local, reads_tags_local, reads_exons_local, reads_introns_local = load_reads(bam_file,
+                                                                                            genome_dict,
+                                                                                            merged_genes_exons,
+                                                                                            threads,
+                                                                                            no_gtag)
+    print(f"Reads assigned to genes in {time.time() - start_time:.2f} seconds")
+    gene_assigned_reads = transform_read_assignment(read_assignment)
+
+    # Set globals ONCE
+    reads_positions = reads_positions_local
+    reads_tags = reads_tags_local
+    reads_exons = reads_exons_local
+    reads_introns = reads_introns_local
+    dna_vcfs = dna_vcfs_in
+    rna_vcfs = rna_vcfs_in
+
+    with open(output_prefix + ".gene_coverage.tsv", "w") as f:
+        f.write("#Gene_name\tChr\tStart\tEnd\tNum_reads\n")
+        for gene_id, gene_region in anno_gene_regions.items():
+            if gene_id not in gene_assigned_reads:
+                gene_coverage = 0
+            else:
+                gene_coverage = len(gene_assigned_reads[gene_id])
+            f.write(f"{anno_gene_names[gene_id]}\t{gene_region['chr']}\t{gene_region['start']}\t"
+                    f"{gene_region['end']}\t{gene_coverage}\n")
+    gene_data_list = []
+    for gene_id, gene_region in anno_gene_regions.items():
+        if (gene_region["chr"] in genome_dict) and (len(gene_assigned_reads[gene_id]) > 0):
+            gene_name = anno_gene_names[gene_id]
+            gene_strand = anno_gene_strands[gene_id]
+            gene_anno_exons = anno_exon_regions[gene_id]
+            gene_anno_introns = anno_intron_regions[gene_id]
+            gene_reads = gene_assigned_reads[gene_id]
+            gene_data_list.append((gene_name, gene_strand, gene_anno_exons, gene_anno_introns, gene_region, gene_reads, min_count))
+    print(f"Total genes to be analyzed: {len(gene_data_list)}")
+
+    start_time = time.time()
+    with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
+        futures = [executor.submit(analyze_gene_with_filtering, *gene_data) for gene_data in gene_data_list]
         for future in concurrent.futures.as_completed(futures):
             gene_ase_events = future.result()
             for event in gene_ase_events:
@@ -776,6 +1057,8 @@ if __name__ == "__main__":
     parse = argparse.ArgumentParser()
     parse.add_argument("-a", "--annotation_file", help="Annotation file in GFF3 or GTF format", required=True)
     parse.add_argument("-b", "--bam_file", help="BAM file", required=True)
+    parse.add_argument("--dna_vcf", help="DNA VCF file", required=False)
+    parse.add_argument("--rna_vcf", help="RNA VCF file", required=False)
     parse.add_argument("-f", "--reference", help="Reference genome file", required=True)
     parse.add_argument("-o", "--output_prefix",
                        help="prefix of output differential splicing file and allele-specific junctions file",
@@ -787,5 +1070,12 @@ if __name__ == "__main__":
                        type=int)
     parse.add_argument("--no_gtag", action="store_true", help="Do not filter read junction with GT-AG signal")
     args = parse.parse_args()
-    analyze(args.annotation_file, args.bam_file, args.reference, args.output_prefix, args.min_sup, args.gene_types,
+    if args.dna_vcf and args.rna_vcf:
+        dna_vcfs = load_dna_vcf(args.dna_vcf)
+        rna_vcfs = load_longcallR_phased_vcf(args.rna_vcf, with_dp_af=False)
+        analyze_with_filtering(args.annotation_file, args.bam_file, args.reference, args.output_prefix, args.min_sup, args.gene_types,
+                args.threads, args.no_gtag, dna_vcfs, rna_vcfs)
+    else:
+        analyze(args.annotation_file, args.bam_file, args.reference, args.output_prefix, args.min_sup, args.gene_types,
             args.threads, args.no_gtag)
+
