@@ -685,7 +685,7 @@ def analyze_gene(gene_name, gene_strand, annotation_exons, annotation_junctions,
         for anno_exon in anno_exons:
             gene_exon_set.add(anno_exon)
 
-    print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
+    # print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
 
     # # Extract relevant reads and regions
     # reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file,
@@ -764,7 +764,7 @@ def analyze_gene_with_filtering(gene_name, gene_strand, annotation_exons, annota
         for anno_exon in anno_exons:
             gene_exon_set.add(anno_exon)
 
-    print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
+    # print(f"gene_name: {gene_name}, sub_reads_tags: {len(sub_reads_tags)}, sub_reads_exons: {len(sub_reads_exons)}, sub_reads_introns: {len(sub_reads_introns)}")
 
     # # Extract relevant reads and regions
     # reads_positions, reads_exons, reads_introns, reads_tags = parse_reads_from_alignment(bam_file,
