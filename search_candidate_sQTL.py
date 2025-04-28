@@ -19,9 +19,9 @@ def load_all_variants(vcf_file):
         for record in vcf:
             # if record.filter.keys() != ['PASS']:
             #     continue
-            is_indel = any(len(allele) != len(record.ref) for allele in record.alleles)
-            if is_indel:
-                continue
+            # is_indel = any(len(allele) != len(record.ref) for allele in record.alleles)
+            # if is_indel:
+            #     continue
             gt = record.samples[0]['GT']
             if gt == (0, 1) or gt == (1, 0):
                 chr = record.chrom
