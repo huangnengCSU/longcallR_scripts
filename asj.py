@@ -1108,7 +1108,7 @@ if __name__ == "__main__":
     parse.add_argument("-b", "--bam_file", help="BAM file", required=True)
     parse.add_argument("--dna_vcf", help="DNA VCF file", required=False)
     parse.add_argument("--rna_vcf", help="RNA VCF file", required=False)
-    parse.add_argument("--min_junctions", help="Minimum number of junctions to be considered", default=0, type=int)
+    parse.add_argument("--min_junctions", help="Minimum number of junctions to be considered", default=2, type=int)
     parse.add_argument("--cluster_with_exons", action="store_true", help="Cluster junctions with exons", default=False)
     parse.add_argument("-f", "--reference", help="Reference genome file", required=True)
     parse.add_argument("-o", "--output_prefix",
