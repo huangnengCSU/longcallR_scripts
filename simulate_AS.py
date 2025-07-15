@@ -108,6 +108,10 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
         t1_id, t1_exons = transcripts[0]
         t2_id, t2_exons = transcripts[1]
 
+        # sort t1_exons and t2_exons, since the transcript may be reverse-stranded
+        t1_exons = sorted(t1_exons, key=lambda x: x[1])
+        t2_exons = sorted(t2_exons, key=lambda x: x[1])
+
         tree = IntervalTree()
         for _, s, e in t1_exons:
             if s < e:
