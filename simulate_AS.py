@@ -157,6 +157,7 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
                         for pos in range(max(s, ov_s), min(e, ov_e) + 1):
                             idx = offset + (pos - s)
                             if random.random() < snp_rate:  # 5% chance to introduce SNP
+                                ref_allele = seq_list[idx]
                                 if seq_list[idx] == "A":
                                     seq_list[idx] = random.choice(['C', 'T'])
                                 elif seq_list[idx] == "C":
@@ -165,7 +166,8 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
                                     seq_list[idx] = random.choice(['A', 'C', 'T'])
                                 elif seq_list[idx] == "T":
                                     seq_list[idx] = random.choice(['A', 'G'])
-                                variant_positions.append((chr, pos))
+                                alt_allele = seq_list[idx]
+                                variant_positions.append((chr, pos, ref_allele, alt_allele))
                                 variant_count += 1
                 offset += e - s + 1
             return ''.join(seq_list), variant_count, variant_positions
