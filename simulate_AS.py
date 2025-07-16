@@ -6,6 +6,8 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 import argparse
+
+
 def generate_simulated_transcripts(annotation_file, reference_genome, output_transcripts, gene_types, asj_case_ratio,
                                    snp_rate):
     """
@@ -144,13 +146,11 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
         seq2 = extract_seq(t2_exons)
 
         # Randomly apply variants for ASJ case (simulate SNPs)
-        def apply_random_snps(seq, exon_list, overlapped_regions, asj_case_ratio=0.5, snp_rate=0.05):
+        def apply_random_snps(seq, exon_list, overlapped_regions, snp_rate=0.05):
             seq_list = list(seq)
             offset = 0
             variant_count = 0
             variant_positions = []
-            if random.random() < asj_case_ratio:  # 50% chance to apply SNPs
-                return seq, 0, []
             for chr, s, e in exon_list:
                 for ov_s, ov_e in overlapped_regions:
                     if s <= ov_s <= e or s <= ov_e <= e:
@@ -172,22 +172,108 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
                 offset += e - s + 1
             return ''.join(seq_list), variant_count, variant_positions
 
-        # For demonstration: apply SNPs to transcript 1 (ASJ case)
-        seq1_mut, variant_count1, variant_positions1 = apply_random_snps(seq1, t1_exons, overlapped_regions,
-                                                                         asj_case_ratio, snp_rate)
-        seq2_mut = seq2  # No changes for transcript 2 (non-ASJ case)
+        # Randomly apply variants together for both transcripts
+        def apply_random_snps_dual(seq1, seq2, exon_list1, exon_list2, overlapped_regions, snp_rate=0.05):
 
-        # Create SeqRecords for the simulated transcripts, header includes gene name, gene ID, transcript IDs, variant count, variant positions
-        if variant_count1 > 0:
-            rec1 = SeqRecord(Seq(seq1_mut), id=f"{gene_name}:{gene_id}:{t1_id}:ASJ",
-                             description=f"Gene: {gene_name}, Variants Count: {variant_count1}, Variant Positions: {variant_positions1}")
-            rec2 = SeqRecord(Seq(seq2_mut), id=f"{gene_name}:{gene_id}:{t2_id}:ASJ", description=f"Gene: {gene_name}")
-            ASJ_case_count += 1
+            # Collect overlap positions
+            overlap_positions = set()
+            for ov_s, ov_e in overlapped_regions:
+                overlap_positions.update(range(ov_s, ov_e + 1))
+
+            # Determine SNP positions and their replacement base (same for both transcripts)
+            snp_info = {}  # {genomic_pos: new_base}
+            for pos in overlap_positions:
+                if random.random() < snp_rate:
+                    snp_info[pos] = None  # Placeholder for replacement base to determine later
+
+            variant_count = len(snp_info)
+            variant_positions = []
+
+            # Determine replacement base for each SNP position (same alt base for both transcripts)
+            # Helper to pick an alternate base
+            def pick_alt_base(base):
+                if base == "A":
+                    return random.choice(['C', 'T'])
+                elif base == "C":
+                    return random.choice(['A', 'G', 'T'])
+                elif base == "G":
+                    return random.choice(['A', 'C', 'T'])
+                elif base == "T":
+                    return random.choice(['A', 'G'])
+                else:
+                    return base  # Leave non-ACGT unchanged just in case
+
+            # Helper to mutate a single transcript sequence
+            def mutate(seq, exon_list, snp_info):
+                seq_list = list(seq)
+                transcript_pos = 0
+                for chr, s, e in exon_list:
+                    for pos in range(s, e + 1):
+                        if pos in snp_info:
+
+                            if snp_info[pos] is None:
+                                ref_allele = seq_list[transcript_pos]
+                                # Determine alternate base using the original base in this transcript
+                                alt_base = pick_alt_base(seq_list[transcript_pos])
+                                snp_info[pos] = alt_base
+                                variant_positions.append((chr, pos, ref_allele, alt_base))
+                            else:
+                                alt_base = snp_info[pos]
+
+                            seq_list[transcript_pos] = alt_base
+                        transcript_pos += 1
+                return ''.join(seq_list)
+
+            # Mutate both transcripts using the same snp_info
+            mutated_seq1 = mutate(seq1, exon_list1, snp_info)
+            mutated_seq2 = mutate(seq2, exon_list2, snp_info)
+
+            return mutated_seq1, mutated_seq2, variant_count, variant_positions
+
+        if random.random() < asj_case_ratio:
+            # ASJ case, only apply SNPs to the first transcript
+            seq1_mut, variant_count1, variant_positions1 = apply_random_snps(seq1, t1_exons, overlapped_regions,
+                                                                             snp_rate)
+            seq2_mut = seq2
+            if variant_count1 > 0:
+                rec1 = SeqRecord(Seq(seq1_mut), id=f"{gene_name}:{gene_id}:{t1_id}:ASJ",
+                                 description=f"Gene: {gene_name}, Variants Count: {variant_count1}, Variant Positions: {variant_positions1}")
+                rec2 = SeqRecord(Seq(seq2_mut), id=f"{gene_name}:{gene_id}:{t2_id}:ASJ",
+                                 description=f"Gene: {gene_name}")
+                ASJ_case_count += 1
+            else:
+                rec1 = SeqRecord(Seq(seq1_mut), id=f"{gene_name}:{gene_id}:{t1_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                rec2 = SeqRecord(Seq(seq2_mut), id=f"{gene_name}:{gene_id}:{t2_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                non_ASJ_case_count += 1
+            simulated_records.extend([rec1, rec2])
         else:
-            rec1 = SeqRecord(Seq(seq1), id=f"{gene_name}:{gene_id}:{t1_id}:non-ASJ", description=f"Gene: {gene_name}")
-            rec2 = SeqRecord(Seq(seq2), id=f"{gene_name}:{gene_id}:{t2_id}:non-ASJ", description=f"Gene: {gene_name}")
-            non_ASJ_case_count += 1
-        simulated_records.extend([rec1, rec2])
+            # Non-ASJ case, both transcripts apply the same SNPs + original transcripts (4 transcripts)
+            seq1_no_mut = seq1
+            seq2_no_mut = seq2
+            seq1_mut, seq2_mut, variant_count1, variant_positions1 = apply_random_snps_dual(seq1, seq2, t1_exons,
+                                                                                            t2_exons,
+                                                                                            overlapped_regions,
+                                                                                            snp_rate)
+            if variant_count1 > 0:
+                rec1 = SeqRecord(Seq(seq1_no_mut), id=f"{gene_name}:{gene_id}:{t1_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                rec2 = SeqRecord(Seq(seq2_no_mut), id=f"{gene_name}:{gene_id}:{t2_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                rec3 = SeqRecord(Seq(seq1_mut), id=f"{gene_name}:{gene_id}:{t1_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}, Variants Count: {variant_count1}, Variant Positions: {variant_positions1}")
+                rec4 = SeqRecord(Seq(seq2_mut), id=f"{gene_name}:{gene_id}:{t2_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}, Variants Count: {variant_count1}, Variant Positions: {variant_positions1}")
+                non_ASJ_case_count += 1
+                simulated_records.extend([rec1, rec2, rec3, rec4])
+            else:
+                rec1 = SeqRecord(Seq(seq1_no_mut), id=f"{gene_name}:{gene_id}:{t1_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                rec2 = SeqRecord(Seq(seq2_no_mut), id=f"{gene_name}:{gene_id}:{t2_id}:non-ASJ",
+                                 description=f"Gene: {gene_name}")
+                non_ASJ_case_count += 1
+                simulated_records.extend([rec1, rec2])
 
     # Write simulated transcripts
     with open(output_transcripts, "w") as out_f:
