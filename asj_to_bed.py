@@ -6,7 +6,7 @@ def convert_asj_to_bed(input_tsv, pval_threshold=1e-10):
             cols = line.strip().split("\t")
             rd = dict(zip(header, cols))
             pvalue = float(rd["P_value"])
-            if pvalue > pval_threshold:
+            if pvalue >= pval_threshold:
                 continue
             junction = rd["#Junction"] # Format: "chr:start-end", 1-based, both inclusive
             strand = rd["Strand"]
