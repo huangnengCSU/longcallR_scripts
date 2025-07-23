@@ -1,6 +1,6 @@
 import gzip
 from collections import defaultdict
-from intervaltree import IntervalTree
+from intervaltree import IntervalTree, Interval
 import random
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -87,6 +87,30 @@ def generate_simulated_transcripts(annotation_file, reference_genome, output_tra
 
     # Load reference genome
     ref_seqs = {rec.id: rec.seq for rec in SeqIO.parse(reference_genome, "fasta")}
+
+    isolated_genes = set()
+    for contig in ref_seqs.keys():
+        # filter out genes with overlaps
+        gene_ivtree = IntervalTree()
+        for gene_id, region in gene_regions.items():
+            chr = region["chr"]
+            start = region["start"]
+            end = region["end"]
+            if chr!=contig:
+                continue
+            iv = Interval(start-1, end, gene_id)  # Convert to 0-based, start-inclusive, end-exclusive
+            gene_ivtree.add(iv)
+        for iv in gene_ivtree:
+            gene_ivtree.remove(iv)
+            overlaps = gene_ivtree.overlap(iv.begin, iv.end)
+            gene_ivtree.add(iv)  # Re-add the original interval
+            if not overlaps:
+                isolated_genes.add(iv.data)
+
+    # Filter out genes with overlaps
+    print(f"Total genes before filtering: {len(gene_regions)}")
+    exon_regions = {gene_id: exons for gene_id, exons in exon_regions.items() if gene_id in isolated_genes}
+    print(f"Total genes after filtering: {len(exon_regions)}")
 
     # Simulate transcripts
     simulated_records = []
